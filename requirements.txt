@@ -1,0 +1,2 @@
+# CyberField 直接依赖
+pandas==3.0.6
