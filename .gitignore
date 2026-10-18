@@ -1,0 +1,32 @@
+# API Key 和本地凭据
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Python 环境和缓存
+.venv/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# 本地数据库与真实采集数据
+data/
+*.db
+*.sqlite
+*.sqlite3
+
+# 自动生成结果
+cleaned_posts.csv
+
+# AI 工具本地敏感配置
+.opencode/
+opencode.json
+opencode.jsonc
+
+# 本地私有材料
+private/
+secrets/
+*.log
