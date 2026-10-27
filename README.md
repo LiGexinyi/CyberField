@@ -244,7 +244,7 @@ CyberField/
 
 ## 2026-10-27 · 清洗逻辑重构与测试独立化
 
-**Git 提交：** `52eae33` — `Refactor cleaning logic and improve independent tests`
+**Git 提交：** `a1ac4bc` — `Refactor cleaning logic and improve independent tests`
 
 使用 OpenCode 辅助完成本轮代码改进。
 
@@ -278,7 +278,7 @@ CyberField/
 
 ## 2026-10-27 · 空文件友好处理与项目约定更新
 
-**Git 提交：** `52eae33` — `Refactor cleaning logic and improve independent tests`（与上一日志同属本次提交）
+**Git 提交：** `a1ac4bc` — `Refactor cleaning logic and improve independent tests`（与上一日志同属本次提交）
 
 ### 本次目标
 - 让程序读取完全空白文件时不崩溃，给出清晰提示；
@@ -308,7 +308,7 @@ CyberField/
 
 ## 2026-10-27 · AGENTS.md 恢复随仓库分发并完成首轮提交
 
-**Git 提交：** `52eae33` — `Refactor cleaning logic and improve independent tests`（本次提交）
+**Git 提交：** `a1ac4bc` — `Refactor cleaning logic and improve independent tests`（本次提交）
 
 ### 本次目标
 - 让 AGENTS.md（AI 开发守则）随仓库分发，保证换环境后约定仍在；
