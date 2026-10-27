@@ -26,6 +26,11 @@ cleaned_posts.csv
 opencode.json
 opencode.jsonc
 
+# 课程与演示材料
+*.pdf
+*.pptx
+*.ppt
+
 # 本地私有材料
 private/
 secrets/

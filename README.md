@@ -242,6 +242,92 @@ CyberField/
 
 ---
 
+## 2026-10-27 · 清洗逻辑重构与测试独立化
+
+**Git 提交：** `52eae33` — `Refactor cleaning logic and improve independent tests`
+
+使用 OpenCode 辅助完成本轮代码改进。
+
+### 本次目标
+- 让测试不再依赖可随时编辑的 `sample_posts.csv`，改为自行构造数据；
+- 拆分"清洗逻辑"与"文件读写"，便于单独测试和后续复用；
+- 修复真正缺失值（None / NaN / pd.NA）未被删除的问题。
+
+### 完成内容
+- `clean_posts.py`：新增纯函数 `clean_dataframe(df)`，负责空文本删除、按 `platform + source_url` 原值去重、按发布时间升序排序；`clean_posts(input_path, output_path)` 接口、返回约定与命令行用法保持不变；
+- 修复空文本判定：改用 `fillna("").astype(str).str.strip()` 统一处理空字符串、全空格与缺失值，避免 `NaN != ""` 判定为 True 导致缺失值被保留；
+- `test_clean_posts.py`：测试数据全部自行构造，不再依赖 `sample_posts.csv`；新增用例覆盖正常清洗、全空文本、缺失值（None/NaN/pd.NA）、全部重复、带列名零行，并保留一个临时目录内的 CSV 读写集成测试；
+- 完全空白文件（0 字节）当前仍会触发 `pandas.errors.EmptyDataError`，属既有行为，暂未新增处理。
+
+### 测试与验证
+
+```powershell
+.\.venv\Scripts\python.exe test_clean_posts.py
+# [通过] 正常清洗 / 全空文本 / 缺失值删除 / 全部重复 / 带列名零行 / CSV 读写集成
+# 全部断言通过 ✓
+
+.\.venv\Scripts\python.exe clean_posts.py
+# 原始数量：8 / 删除空文本数量：1 / 去重数量：1 / 最终数量：6
+```
+
+### 下一步
+- 确认完全空白文件是否需要新增友好处理；
+- 设计统一的网络帖子数据结构并建立 SQLite 本地资料库。
+
+---
+
+## 2026-10-27 · 空文件友好处理与项目约定更新
+
+**Git 提交：** `52eae33` — `Refactor cleaning logic and improve independent tests`（与上一日志同属本次提交）
+
+### 本次目标
+- 让程序读取完全空白文件时不崩溃，给出清晰提示；
+- 确立"每次修改都更新 README 当天日志"的项目约定；
+- 调整 `.gitignore`，忽略课程材料与 AGENTS.md。
+
+### 完成内容
+- `clean_posts.py`：捕获 `pandas.errors.EmptyDataError`，对完全空白文件（0 字节或仅有 BOM）打印中文警告，并按"0 条帖子"继续处理（返回全 0 统计、写出仅含表头的文件），不再崩溃；
+- `test_clean_posts.py`：新增"空文件友好处理"用例（0 字节文件 → 全 0 统计 + 表头输出）；
+- `AGENTS.md`：新增约定——每次代码修改都要在 README 当天开发日志中追加记录；AGENTS.md 已加入 `.gitignore`（本地生效，不随仓库分发）；
+- `.gitignore`：新增忽略 `AGENTS.md` 及课程演示材料（`*.pdf` / `*.pptx` / `*.ppt`）。
+
+### 测试与验证
+
+```powershell
+.\.venv\Scripts\python.exe test_clean_posts.py
+# 7 个用例全部 [通过]，含新增"空文件友好处理"
+
+.\.venv\Scripts\python.exe clean_posts.py
+# 原始数量：8 / 删除空文本数量：1 / 去重数量：1 / 最终数量：6
+```
+
+### 下一步
+- 设计统一的网络帖子数据结构并建立 SQLite 本地资料库。
+
+---
+
+## 2026-10-27 · AGENTS.md 恢复随仓库分发并完成首轮提交
+
+**Git 提交：** `52eae33` — `Refactor cleaning logic and improve independent tests`（本次提交）
+
+### 本次目标
+- 让 AGENTS.md（AI 开发守则）随仓库分发，保证换环境后约定仍在；
+- 将当前工作区的代码改进整理为一次 Git 提交。
+
+### 完成内容
+- `.gitignore`：移除 `AGENTS.md` 忽略规则，AGENTS.md 恢复纳入版本管理；
+- `AGENTS.md`：同步更新说明文字（不再忽略，随仓库分发）；
+- 提交涵盖：`clean_posts.py`（新增 `clean_dataframe`、缺失值修复、空文件友好处理）、`test_clean_posts.py`（测试独立化 + 7 个用例）、`README.md`（开发日志）、`.gitignore`（忽略课程材料）。
+
+### 测试与验证
+- 测试结果不变：7 个用例全部通过 ✓；
+- 命令行结果不变：8 / 1 / 1 / 6。
+
+### 下一步
+- 设计统一的网络帖子数据结构并建立 SQLite 本地资料库。
+
+---
+
 ## 后续开发记录
 
 今后每完成一个相对独立的功能、重要修复或开发阶段，在本节末尾按如下格式追加：
