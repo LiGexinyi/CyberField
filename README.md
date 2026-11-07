@@ -5,7 +5,7 @@
 
 CyberField 是一个面向中文互联网的网络文化数据采集与本地研究工具，旨在帮助研究者系统收集、整理和追踪网络热梗、流行话题及亚文化现象，为研究其传播机制、演化过程和社会文化意义提供可追溯的原始资料。
 
-目前项目处于早期开发阶段，已经实现基础 CSV 数据清洗功能，其他模块将逐步开发。
+目前项目已完成基础 CSV 清洗、SQLite 存储与关键词查询、多源采集框架（`collect/`，已接入 MediaCrawler 并支持终端演示），并规划三周内建成 Web 可视化与分析能力（时间线梗演化、群体画像、话题共现、讨论度/热度、态度分析），详细路线见 `docs/roadmap.md`。
 
 ## 1. 项目背景
 
@@ -35,14 +35,16 @@ CyberField 的主要目标包括：
 | 模块 | 主要功能 | 状态 |
 |---|---|---|
 | 数据导入与清洗 | CSV 读取、空文本过滤、去重、时间排序 | 基础版本已完成 |
-| 数据采集 | 关键词检索、分页采集、限速、断点续采、增量更新 | 规划中 |
-| 本地数据库 | SQLite 存储、索引和查询 | 规划中 |
+| 本地数据库 | SQLite 存储（posts 表 + collected_posts 表）与关键词查询 | 已完成 |
+| 多源采集框架 | `collect/` 薄适配器、统一 Post 契约、调度容错去重 | 已完成（首源 MediaCrawler） |
+| 数据导出 | CSV、JSON 导出 | 已完成 |
+| 数据采集 | 真实平台接入（合规源优先）、增量更新 | 接入进行中（三周计划） |
+| 分析引擎 | 时间线梗演化、群体画像、话题共现、讨论度/热度、态度分析 | 规划中（三周计划） |
+| 用户与账号管理 | 注册/登录、平台账号凭据加密存储 | 规划中 |
+| 可视化界面 | 本地 Web 仪表盘（FastAPI + ECharts），预留 LLM 分析 | 规划中 |
 | 话题管理 | 管理研究主题、关键词和衍生表达 | 规划中 |
 | 传播追踪 | 早期记录、话题时间线及传播趋势 | 规划中 |
-| 资料浏览 | 全文检索、平台筛选、时间筛选 | 规划中 |
 | 田野笔记 | 人工标注、收藏与研究记录 | 规划中 |
-| 数据导出 | CSV、JSON 及研究材料导出 | 规划中 |
-| 可视化界面 | 本地交互式研究工作台 | 规划中 |
 
 本项目优先保证数据采集的可靠性、来源可追溯性和本地资料的长期可用性，不以自动生成社会学结论为核心功能。
 
@@ -52,10 +54,14 @@ CyberField 的主要目标包括：
 |---|---|---|
 | Python 3.13 | 主要开发语言 | 已使用 |
 | Pandas | 数据导入、清洗、去重和排序 | 已使用 |
-| SQLite | 本地数据存储 | 计划使用 |
-| Requests / BeautifulSoup | 获准访问的网页与接口数据处理 | 计划使用 |
-| Streamlit | 本地交互式界面 | 计划使用 |
-| Plotly | 时间线和数据可视化 | 计划使用 |
+| SQLite + FTS5 | 本地数据存储与全文检索 | 已使用（FTS5 规划中） |
+| collect/ 适配器 | 多源采集（统一 Post 契约 + 调度） | 已使用 |
+| MediaCrawler | 外部采集工具（xhs/dy/ks/bili/wb/tieba/zhihu） | 已接入 |
+| jieba | 中文分词与分析 | 规划中 |
+| transformers | 中文预训练情感模型 | 规划中 |
+| FastAPI + ECharts | Web 可视化仪表盘 | 规划中 |
+| JWT + cryptography | 用户会话与凭据加密 | 规划中 |
+| LLM（Ollama / OpenAI 兼容） | 深度分析扩展 | 预留 |
 | Git | 项目版本管理 | 已使用 |
 | OpenCode | AI 辅助编程与调试 | 已使用 |
 
@@ -103,15 +109,24 @@ python -m venv .venv
 .\.venv\Scripts\python.exe clean_posts.py
 ```
 
-当前程序读取 `sample_posts.csv`，执行空文本过滤、重复记录删除及发布时间排序，结果保存为 `cleaned_posts.csv`。
+程序读取 `data/sample_posts.csv`，执行空文本过滤、重复记录删除及发布时间排序，结果保存为 `data/cleaned_posts.csv`。
 
 ### 6.4 运行测试
 
 ```powershell
 .\.venv\Scripts\python.exe test_clean_posts.py
+.\.venv\Scripts\python.exe test_posts_db.py
 ```
 
-当前测试样本包含 8 条虚构帖子，其中 1 条为空文本、1 条为重复记录。预期最终保留 6 条。
+两套独立测试共 20 项（清洗 7 项 + 存储 13 项），测试数据全部自行构造，不依赖样本文件。
+
+### 6.5 运行多源采集 Demo（终端）
+
+```powershell
+.\.venv\Scripts\python.exe -m collect.demo_cli
+```
+
+终端交互菜单：采集新关键词（调用 MediaCrawler，首次需扫码登录）、浏览本地库、统计概览、导出 CSV/JSON。采集数据存于 `data/collect.db`，导出到 `data/export/`。目标架构与分析规划见 `docs/roadmap.md`。
 
 ## 7. 项目文件结构
 
@@ -120,12 +135,26 @@ CyberField/
 ├── .gitignore
 ├── README.md
 ├── requirements.txt
-├── clean_posts.py
-├── test_clean_posts.py
-├── sample_posts.csv
-├── cleaned_posts.csv       # 运行生成，不提交 Git
-├── .venv/                  # 本地虚拟环境，不提交 Git
-└── __pycache__/            # Python 缓存，不提交 Git
+├── clean_posts.py           # 数据清洗
+├── posts_db.py              # SQLite 存储与关键词查询（cp2_B 合并）
+├── test_clean_posts.py      # 清洗测试（7 项）
+├── test_posts_db.py         # 存储测试（13 项）
+├── AGENTS.md
+├── collect/                 # 多源采集框架（新增）
+│   ├── post.py              # 统一数据契约 Post
+│   ├── orchestrator.py      # 多源调度 / 合并 / 去重
+│   ├── store.py             # 采集库入库 / 查询 / 统计
+│   ├── demo_cli.py          # 终端交互式 Demo
+│   └── sources/             # 适配器（base_source / mediacrawler_source）
+├── data/                    # 数据文件（一律不提交 Git）
+│   ├── sample_posts.csv
+│   ├── cleaned_posts.csv    # 运行生成
+│   ├── collect.db           # 采集库（collected_posts 表）
+│   └── export/              # 导出 CSV / JSON
+├── docs/                    # 文档
+│   ├── code_overview.md     # 代码全览（12 文件）
+│   └── 第02讲-提示词工程基础.pdf  # 课程材料，不提交 Git
+└── .venv/                   # 本地虚拟环境，不提交 Git
 ```
 
 随着功能扩展，将逐步添加采集器、数据库、可视化界面和研究项目管理模块。
@@ -323,8 +352,92 @@ CyberField/
 - 测试结果不变：7 个用例全部通过 ✓；
 - 命令行结果不变：8 / 1 / 1 / 6。
 
-### 下一步
-- 设计统一的网络帖子数据结构并建立 SQLite 本地资料库。
+## 2026-11-03 · A/B 分支实现评估合并 + 多源采集框架（MediaCrawler 接入）
+
+**执行方：** OpenCode 辅助；本轮未执行 Git 提交/推送。
+
+### 本次目标
+- 评估 checkpoint2-a / checkpoint2-b 两份 SQLite 实现，将更优者合并进主项目；
+- 建立"多源采集"薄适配器框架（统一数据契约 + 容错调度 + 独立入库）；
+- 接入第一个外部源 MediaCrawler（真实搜索），提供终端交互式浏览 demo。
+
+### A/B 评估结论与合并
+- 逐行对比两份 `posts_db.py`：**cp2_B 整体更优**——时间字段统一规范化为 `YYYY-MM-DD HH:MM:SS`（排序正确）、事务 + 整批校验（失败不留部分记录）、自带命令行入口、字段 NOT NULL 强约束、13 项测试；
+- cp2_A 的特色（多关键词 AND/OR 查询、逐行容错、导入统计字典）暂记为后续增强项，本轮不强融；
+- 采用"复制实现文件"方式完成合并（两分支实现均为未跟踪文件，git merge 带不来内容）：将 cp2_B 的 `posts_db.py` + `test_posts_db.py` 复制进主项目；
+- 主项目验证：`test_posts_db.py` 13 项测试全部通过，退出码 0；CLI 查询行为正常。
+
+### 多源采集框架（增量新增 `collect/` 目录，未修改既有文件）
+- `collect/post.py`：统一数据契约 Post + 平台名规范化/中文标签；
+- `collect/sources/base_source.py`：源接口（search/health_check）+ SourceUnavailable 异常；
+- `collect/sources/mediacrawler_source.py`：MediaCrawler 适配器（子进程调用 + JSONL 解析为 Post）；
+- `collect/sources/__init__.py`：适配器注册表（新增源只在此登记，不影响旧源）；
+- `collect/orchestrator.py`：多源调度——逐个调用、失败跳过、按 (platform, url) 去重；
+- `collect/store.py`：独立采集库 `data/collect.db` 的 collected_posts 表（含标题/作者/关键词/来源适配器），不触碰现有 posts 表；
+- `collect/demo_cli.py`：终端交互式浏览（采集/浏览/统计/导出）。
+
+### MediaCrawler 外部工具部署
+- 仓库克隆至 `D:\Projects\MediaCrawler`（独立 venv，Python 3.13.13）；
+- 依赖安装完成：`requirements.txt` 中 `pandas==2.2.3` 放宽为 `pandas>=2.2.3`（Python 3.13 无 2.2.3 预编译包，实装 pandas 3.1.0）；
+- 配置调整：`config/base_config.py` 的 `CDP_CONNECT_EXISTING` 改为 False（让 MediaCrawler 自动启动 Chrome，免手动开调试端口）；
+- 真实搜索需首次扫码登录（登录态由 MediaCrawler 自动保存）。
+
+### 测试与验证
+- 采集框架自测（含样例数据）：save / stats / query 全部正常；
+- MediaCrawler `--help` 验证通过（注意：必须以 MediaCrawler 目录为工作目录运行，否则相对路径 `libs/douyin.js` 报错）；
+- 真实搜索验证：进行中（扫码登录后补充结果）。
+
+### 已知问题与下一步
+- 待办：真实搜索结果入库验证；
+- 后续增强：cp2_A 多关键词 AND/OR 查询、zhihu-search / weibo-mcp 等更多源接入（架构已支持，新增适配器即可）；
+- 数据隐私：MediaCrawler 输出已对作者昵称脱敏、创作者 ID 匿名化，符合项目数据来源与隐私原则。
+
+---
+
+## 2026-11-07 · 项目目录轻度整理与代码全览
+
+**执行方：** OpenCode 辅助；本轮未执行 Git 提交/推送。
+
+### 本次整理（代码仅两处路径微调）
+- 删除全部 `__pycache__` 缓存（含 .venv 内字节码缓存，运行时会自动重建）；
+- 数据文件归位：`sample_posts.csv`、`cleaned_posts.csv` 移入新建 `data/` 目录；
+- 采集数据归位：`collect/data/` 下的 `collect.db` 与 `export/` 一并移入根 `data/`，`collect/` 包内只保留代码；
+- 课程材料归位：`第02讲-提示词工程基础.pdf` 移入 `docs/`；
+- 新增 `docs/code_overview.md`：全部代码全览（12 文件、约 1638 行，含完整源码与架构说明）；
+- 微调：`store.py` 采集库路径与 `demo_cli.py` 导出路径改为根 `data/`（共两行）；
+- README 第 7 节"项目文件结构"同步更新。
+
+### 验证
+- `test_posts_db.py`（13 项）+ `test_clean_posts.py`（7 项）= 20/20 全部通过 ✓；
+- collect demo_cli 统计正常（在库 18 条），导出写入 `data/export/`。 
+
+### 已知说明
+- （本次已解决）`clean_posts.py` 命令行路径已同步改为 `data/`，见下一条日志。
+
+---
+
+## 2026-11-07 · 三周开发计划与目标架构规划
+
+**执行方：** OpenCode 辅助；本轮未执行 Git 提交/推送。
+
+### 规划背景
+在现有 `collect/` 框架基础上，规划三周（2026-11-07 → 11-28）内建成「多源采集 + 分析 + Web 可视化」研究平台。
+
+### 目标架构（详见 `docs/roadmap.md`）
+- **多平台采集**：先打通合规源（知乎官方 API、微博访客模式、B站），后续扩展全部平台（小红书等攻坚项）；
+- **分析引擎**：时间线梗演化、群体画像、话题共现、每天讨论度 / 火的时间、态度分析（HuggingFace 中文预训练情感模型）；
+- **Web 可视化**：FastAPI + ECharts 本地仪表盘；
+- **用户管理**：注册 / 登录 + 平台账号凭据加密存储（用户自备各平台登录账号，Cookie 仅本人可见）；
+- **LLM 扩展预留**：`LLMProvider` 抽象接口（本地 Ollama / OpenAI 兼容 API 可切换），后续做梗演化叙事、态度提炼、趋势预测。
+
+### 本次配套整合
+- `clean_posts.py` 命令行入口数据路径改为 `data/`（与数据归位保持一致，读 `data/sample_posts.csv`、写 `data/cleaned_posts.csv`）；
+- README 总体介绍（功能模块、技术栈、运行方式）同步新架构；
+- `AGENTS.md` 新增「变更沟通与文档同步约定」：每次修改须在回复中明确说明改了什么，并同步 README / docs。
+
+### 验证
+- `test_clean_posts.py` / `test_posts_db.py` 20 项全部通过 ✓；
+- `clean_posts.py` 命令行直接运行验证通过：原始 8 → 删空 1 → 去重 1 → 最终 6。
 
 ---
 
@@ -361,3 +474,10 @@ CyberField 最初作为清华大学《AI 编程进阶：方法与实践》课程
 开发过程中使用 ChatGPT 辅助需求讨论、技术学习和任务规划，使用 OpenCode 辅助本地编程、运行与调试。具体运行验证、数据核查及网络文化现象的社会意义解释由开发者负责。
 
 项目仍处于初期开发阶段，README 将随着实际进展持续更新。
+
+## 2026-11-03 · 小红书搜索接口版本核对
+
+- 通过用户手动网页搜索的只读监听，观察到 `/api/sns/web/v2/search/notes` 返回 HTTP 200、success=true、code=0、items 22 项。该数量为搜索结果项数，未验证全部均为笔记。
+- MediaCrawler 原先调用 v1，诊断返回只有 has_more=false，没有 items；将 `media_platform/xhs/client.py` 中搜索路由最小更新为 v2。
+- 仅做语法检查，尚未证明 v2 路由与旧请求参数组合能正常获取数据；未批量采集、未提交 Git。
+- 正常网页还包含 ext_flags、filters、geo、image_formats、message_id、session_id 等字段；必要性待验证，不猜造参数、不修改风控或签名算法。

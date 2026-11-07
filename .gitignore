@@ -18,8 +18,10 @@ data/
 *.sqlite
 *.sqlite3
 
-# 自动生成结果
+# 帖子数据文件（样本 / 清洗结果 / 导出结果，一律不进版本库）
+sample_posts.csv
 cleaned_posts.csv
+*.csv
 
 # AI 工具本地敏感配置
 .opencode/

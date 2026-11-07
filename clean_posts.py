@@ -108,9 +108,9 @@ def clean_posts(input_path, output_path):
 def main():
     # 让 print 输出的中文在 Windows 控制台正常显示（解决乱码问题）。
     sys.stdout.reconfigure(encoding="utf-8")
-    # 调用清洗函数：读 sample_posts.csv，清洗结果存到 cleaned_posts.csv。
-    stats = clean_posts(BASE_DIR / "sample_posts.csv",
-                        BASE_DIR / "cleaned_posts.csv")
+    # 调用清洗函数：读 data/sample_posts.csv，清洗结果存到 data/cleaned_posts.csv。
+    stats = clean_posts(BASE_DIR / "data" / "sample_posts.csv",
+                        BASE_DIR / "data" / "cleaned_posts.csv")
     # f-string：把字典里的统计数字直接嵌进字符串打印。
     print(f"原始数量：{stats['total']}")
     print(f"删除空文本数量：{stats['empty_removed']}")
