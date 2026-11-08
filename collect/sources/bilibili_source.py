@@ -12,6 +12,7 @@
 """
 
 import re
+import time
 from collect.time_utils import normalize_time
 
 from collect.post import Post, normalize_platform
@@ -23,8 +24,11 @@ _HOME_URL = "https://www.bilibili.com/"
 _SEARCH_API = "https://api.bilibili.com/x/web-interface/search/type"
 # 搜索结果标题里会带 <em class="keyword">高亮标签</em>，需要剥掉。
 _TAG_RE = re.compile(r"<[^>]+>")
-# 翻页上限：每页约 20 条，最多 8 页 ≈ 160 条（防风控与接口滥用）。
-_MAX_PAGES = 8
+# 深翻页：每页约 20 条，上限 50 页 ≈ 1000 条/关键词（实测深翻稳定，
+# 用页间延迟控风控；触发 -412 时早页重试一次、晚页降级保留已拿数据）。
+_MAX_PAGES = 50
+_PAGE_DELAY = 0.3     # 页间延迟，降低 -412 风控概率
+_RETRY_DELAY = 3.0    # 早页遇风控时的重试间隔
 
 
 class BilibiliApiSource(BaseSource):
@@ -37,10 +41,11 @@ class BilibiliApiSource(BaseSource):
 
     def search(self, keyword: str, platform: str | None = None,
                limit: int = 20) -> list[Post]:
-        """搜索关键词，返回 B站视频帖子列表（必要时翻页凑够 limit）。
+        """搜索关键词，返回 B站视频帖子列表（必要时深翻页凑够 limit）。
 
-        B站搜索接口每页固定约 20 条，limit 超过一页时自动翻页，
-        直到凑满 limit 或翻完可用页为止（上限 8 页，防风控）。
+        B站搜索接口每页固定约 20 条，limit 超过一页时自动翻页，直到凑满
+        limit 或翻完可用页（上限 _MAX_PAGES ≈ 1000 条）。页间有延迟；
+        触发风控(-412)时：早页重试一次，晚页降级返回已拿数据，不整次失败。
         """
         # 只服务 B站平台；调度器传了别的平台码时静默返回空。
         if normalize_platform(platform or "bilibili") != "bilibili":
@@ -52,16 +57,32 @@ class BilibiliApiSource(BaseSource):
             posts: list[Post] = []
             page = 1
             while len(posts) < target and page <= _MAX_PAGES:
-                data = self._session.get_json(
-                    _SEARCH_API,
-                    params={"search_type": "video", "keyword": keyword,
-                            "page": page},
-                    referer=_HOME_URL,
-                )
+                try:
+                    data = self._session.get_json(
+                        _SEARCH_API,
+                        params={"search_type": "video", "keyword": keyword,
+                                "page": page},
+                        referer=_HOME_URL,
+                    )
+                except Exception as exc:
+                    if posts:
+                        break  # 已有一部分结果，降级返回
+                    raise SourceUnavailable(f"B站接口请求失败：{exc}") from exc
                 if data.get("code") != 0:
-                    raise SourceUnavailable(
-                        f"B站接口返回 code={data.get('code')} "
-                        f"msg={data.get('message')}")
+                    # 风控(-412)或接口异常：早页重试一次，晚页保留已拿数据。
+                    if posts or page > 5:
+                        break
+                    time.sleep(_RETRY_DELAY)
+                    data = self._session.get_json(
+                        _SEARCH_API,
+                        params={"search_type": "video", "keyword": keyword,
+                                "page": page},
+                        referer=_HOME_URL,
+                    )
+                    if data.get("code") != 0:
+                        raise SourceUnavailable(
+                            f"B站接口返回 code={data.get('code')} "
+                            f"msg={data.get('message')}")
                 results = (data.get("data") or {}).get("result") or []
                 for r in results:
                     if isinstance(r, dict):
@@ -69,6 +90,8 @@ class BilibiliApiSource(BaseSource):
                 if not results:
                     break  # 没更多结果了
                 page += 1
+                if len(posts) < target and page <= _MAX_PAGES:
+                    time.sleep(_PAGE_DELAY)
         except Exception as exc:
             raise SourceUnavailable(f"B站接口请求失败：{exc}") from exc
         return posts[:target]

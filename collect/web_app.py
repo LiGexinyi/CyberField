@@ -48,11 +48,21 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(content)
 
     def do_GET(self):
-        """响应页面或本地库快照，缺失数据库显示空状态。"""
+        """响应页面或本地库快照（分页），缺失数据库显示空状态。"""
         path = urlsplit(self.path).path
         if path == "/api/posts":
             try:
-                self._send_json({"rows": store.export_rows(self.server.db_path)})
+                from urllib.parse import parse_qs
+                qs = parse_qs(urlsplit(self.path).query)
+                try:
+                    limit = min(max(int(qs.get("limit", ["500"])[0]), 1), 100000)
+                    offset = max(int(qs.get("offset", ["0"])[0]), 0)
+                except (TypeError, ValueError):
+                    limit, offset = 500, 0
+                rows = store.export_rows(self.server.db_path)
+                total = len(rows)
+                self._send_json({"rows": rows[offset:offset + limit],
+                                 "total": total})
             except Exception:
                 self.send_error(500, "Cannot read local database")
             return
