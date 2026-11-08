@@ -56,15 +56,18 @@ class MediaCrawlerSource(BaseSource):
 
     def __init__(self, mc_dir: str = r"D:\Projects\MediaCrawler",
                  mc_python: str | None = None,
-                 login: str = "qrcode"):
+                 login: str = "qrcode",
+                 ocr: bool = False):
         """参数：
             mc_dir    MediaCrawler 仓库根目录
             mc_python MediaCrawler 的 Python 解释器（默认 .venv/Scripts/python.exe）
             login     登录方式 qrcode / cookie（首次需扫码）
+            ocr       是否对笔记图片做 OCR（识别观点文字，慢约 1 秒/图）
         """
         self.mc_dir = Path(mc_dir)
         self.mc_python = mc_python or str(self.mc_dir / ".venv" / "Scripts" / "python.exe")
         self.login = login
+        self.ocr = ocr
 
     # ---------------------------------------------------------------- 对外接口
     def search(self, keyword: str, platform: str | None = None,
@@ -231,6 +234,21 @@ class MediaCrawlerSource(BaseSource):
         text = rec.get("desc") or ""
         url = rec.get("note_url") or rec.get("url") or ""
         tags = rec.get("tag_list") or ""
+        extra: dict = {
+            "liked": rec.get("liked_count"),
+            "collected": rec.get("collected_count"),
+            "comment": rec.get("comment_count"),
+            "share": rec.get("share_count"),
+            "note_id": rec.get("note_id"),
+            "tags": tags.split(",") if tags else [],
+            "type": rec.get("type"),
+        }
+        if self.ocr:
+            # 识别图片里的观点文字；结果独立存字段，不污染原文。
+            from collect import ocr
+            lines = ocr.ocr_note_images(rec.get("image_list") or "")
+            if lines:
+                extra["ocr_text"] = lines
         return Post(
             platform=normalize_platform(code),
             title=title,
@@ -240,15 +258,7 @@ class MediaCrawlerSource(BaseSource):
             published_at=normalize_time(rec.get("time")),
             source_adapter=self.name,
             keyword=str(rec.get("source_keyword") or keyword or ""),
-            extra={
-                "liked": rec.get("liked_count"),
-                "collected": rec.get("collected_count"),
-                "comment": rec.get("comment_count"),
-                "share": rec.get("share_count"),
-                "note_id": rec.get("note_id"),
-                "tags": tags.split(",") if tags else [],
-                "type": rec.get("type"),
-            },
+            extra=extra,
         )
 
     def _to_comment_post(self, rec: dict, code: str, keyword: str | None,
