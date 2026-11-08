@@ -1,14 +1,17 @@
 """B站游客态搜索适配器。
 
-直接调用 B站公开搜索接口（免登录、游客态）：
-    https://api.bilibili.com/x/web-interface/search/type?search_type=video&keyword=xxx
+调用 B站公开搜索接口（免登录、游客态）：
+    https://api.bilibili.com/x/web-interface/search/type
 
-流程：先访问 www.bilibili.com 主页拿 buvid3 等 Cookie（游客身份标识），
-再带 Referer 请求搜索接口，返回的视频列表规范化为统一 Post。
+支持两种内容形态，各自独立深翻页（每页约 20 条、上限 50 页）：
+    video   视频（标题/简介/播放量）
+    article 专栏文章（标题/摘要/阅读量/评论数）
 
-无需安装任何额外依赖（纯标准库 HTTP），无登录、无验证码，
-属于对公开数据的合规访问。被风控或接口变动时抛 SourceUnavailable，
-由调度器跳过该源，不影响其他源。
+一个关键词视频 + 专栏合计约 1800 条，是纯游客态下最大规模的数据源。
+页间有小延迟降低风控概率；触发 -412 时早页重试一次、晚页降级保留已拿数据。
+
+无需登录、无验证码，属于对公开数据的合规访问。被风控或接口变动时抛
+SourceUnavailable，由调度器跳过该源，不影响其他源。
 """
 
 import re
@@ -19,16 +22,18 @@ from collect.post import Post, normalize_platform
 from collect.sources.base_source import BaseSource, SourceUnavailable
 from collect.sources.http_client import HttpSession
 
-# 主页：先访问拿 Cookie；搜索接口：视频搜索。
+# 主页：先访问拿 Cookie；搜索接口：按内容类型搜索。
 _HOME_URL = "https://www.bilibili.com/"
 _SEARCH_API = "https://api.bilibili.com/x/web-interface/search/type"
 # 搜索结果标题里会带 <em class="keyword">高亮标签</em>，需要剥掉。
 _TAG_RE = re.compile(r"<[^>]+>")
-# 深翻页：每页约 20 条，上限 50 页 ≈ 1000 条/关键词（实测深翻稳定，
+# 深翻页：每页约 20 条，上限 50 页 ≈ 1000 条/类型（实测深翻稳定，
 # 用页间延迟控风控；触发 -412 时早页重试一次、晚页降级保留已拿数据）。
 _MAX_PAGES = 50
 _PAGE_DELAY = 0.3     # 页间延迟，降低 -412 风控概率
 _RETRY_DELAY = 3.0    # 早页遇风控时的重试间隔
+# 一次搜索覆盖的内容形态：视频 + 专栏文章。
+_SEARCH_TYPES = ("video", "article")
 
 
 class BilibiliApiSource(BaseSource):
@@ -41,78 +46,108 @@ class BilibiliApiSource(BaseSource):
 
     def search(self, keyword: str, platform: str | None = None,
                limit: int = 20) -> list[Post]:
-        """搜索关键词，返回 B站视频帖子列表（必要时深翻页凑够 limit）。
+        """搜索关键词，返回 B站视频+专栏帖子列表（必要时深翻页凑够 limit）。
 
-        B站搜索接口每页固定约 20 条，limit 超过一页时自动翻页，直到凑满
-        limit 或翻完可用页（上限 _MAX_PAGES ≈ 1000 条）。页间有延迟；
-        触发风控(-412)时：早页重试一次，晚页降级返回已拿数据，不整次失败。
+        每种内容形态分别翻页（上限 _MAX_PAGES），合并后按 limit 截断；
+        limit 很大时 video 与 article 各分约一半额度，单关键词合计约 1800 条。
         """
         # 只服务 B站平台；调度器传了别的平台码时静默返回空。
         if normalize_platform(platform or "bilibili") != "bilibili":
             return []
         target = max(int(limit), 1)
+        per_type = max(1, target // len(_SEARCH_TYPES))
+        posts: list[Post] = []
         try:
             # 第一步：访问主页拿游客 Cookie，否则搜索接口返回 -412 风控。
             self._session.get(_HOME_URL)
-            posts: list[Post] = []
-            page = 1
-            while len(posts) < target and page <= _MAX_PAGES:
-                try:
-                    data = self._session.get_json(
-                        _SEARCH_API,
-                        params={"search_type": "video", "keyword": keyword,
-                                "page": page},
-                        referer=_HOME_URL,
-                    )
-                except Exception as exc:
-                    if posts:
-                        break  # 已有一部分结果，降级返回
-                    raise SourceUnavailable(f"B站接口请求失败：{exc}") from exc
-                if data.get("code") != 0:
-                    # 风控(-412)或接口异常：早页重试一次，晚页保留已拿数据。
-                    if posts or page > 5:
-                        break
-                    time.sleep(_RETRY_DELAY)
-                    data = self._session.get_json(
-                        _SEARCH_API,
-                        params={"search_type": "video", "keyword": keyword,
-                                "page": page},
-                        referer=_HOME_URL,
-                    )
-                    if data.get("code") != 0:
-                        raise SourceUnavailable(
-                            f"B站接口返回 code={data.get('code')} "
-                            f"msg={data.get('message')}")
-                results = (data.get("data") or {}).get("result") or []
-                for r in results:
-                    if isinstance(r, dict):
-                        posts.append(self._to_post(r, keyword))
-                if not results:
-                    break  # 没更多结果了
-                page += 1
-                if len(posts) < target and page <= _MAX_PAGES:
-                    time.sleep(_PAGE_DELAY)
+            for st in _SEARCH_TYPES:
+                got = self._search_pages(keyword, st, per_type)
+                posts.extend(got)
+                if len(posts) >= target:
+                    break
         except Exception as exc:
             raise SourceUnavailable(f"B站接口请求失败：{exc}") from exc
         return posts[:target]
 
     # ---------------------------------------------------------------- 内部实现
-    def _to_post(self, r: dict, keyword: str) -> Post:
-        """把 B站搜索结果的一条记录转成统一 Post。"""
+    def _search_pages(self, keyword: str, search_type: str,
+                      limit: int) -> list[Post]:
+        """按内容类型深翻页，返回该类型的 Post 列表（≤ limit）。"""
+        posts: list[Post] = []
+        page = 1
+        while len(posts) < limit and page <= _MAX_PAGES:
+            try:
+                data = self._session.get_json(
+                    _SEARCH_API,
+                    params={"search_type": search_type, "keyword": keyword,
+                            "page": page},
+                    referer=_HOME_URL,
+                )
+            except Exception as exc:
+                if posts:
+                    break  # 已有一部分结果，降级返回
+                raise SourceUnavailable(f"B站接口请求失败：{exc}") from exc
+            if data.get("code") != 0:
+                # 风控(-412)或接口异常：早页重试一次，晚页保留已拿数据。
+                if posts or page > 5:
+                    break
+                time.sleep(_RETRY_DELAY)
+                data = self._session.get_json(
+                    _SEARCH_API,
+                    params={"search_type": search_type, "keyword": keyword,
+                            "page": page},
+                    referer=_HOME_URL,
+                )
+                if data.get("code") != 0:
+                    raise SourceUnavailable(
+                        f"B站接口返回 code={data.get('code')} "
+                        f"msg={data.get('message')}")
+            results = (data.get("data") or {}).get("result") or []
+            for r in results:
+                if isinstance(r, dict):
+                    posts.append(self._to_post(r, keyword, search_type))
+            if not results:
+                break  # 没更多结果了
+            page += 1
+            if len(posts) < limit and page <= _MAX_PAGES:
+                time.sleep(_PAGE_DELAY)
+        return posts
+
+    def _to_post(self, r: dict, keyword: str, search_type: str) -> Post:
+        """把一条搜索结果转成统一 Post（video 与 article 字段不同）。"""
         # 去掉 <em> 高亮标签，标题/简介才是干净文本。
         title = _TAG_RE.sub("", r.get("title") or "").strip()
-        desc = _TAG_RE.sub("", r.get("description") or "").strip()
-        url = r.get("arcurl") or ""
-        # pubdate 是 Unix 秒级时间戳，转成统一时间格式。
+        desc = _TAG_RE.sub("", r.get("desc") or "").strip()
+        if search_type == "article":
+            cid = r.get("id")
+            url = f"https://www.bilibili.com/read/cv{cid}" if cid else ""
+            # pubdate 是时间戳；pub_time 是文本日期，都能被统一转换。
+            raw_time = r.get("pubdate") or r.get("pub_time") or ""
+            return Post(
+                platform="bilibili",
+                title=title,
+                text=desc or title,
+                url=url,
+                author=r.get("author") or "",
+                published_at=normalize_time(raw_time),
+                source_adapter=self.name,
+                keyword=keyword,
+                extra={
+                    "article_id": cid,
+                    "view": r.get("view"),           # 阅读量
+                    "like": r.get("like"),           # 点赞
+                    "reply": r.get("reply"),         # 评论数
+                    "category": r.get("category_name"),
+                },
+            )
+        # video：pubdate 是 Unix 秒级时间戳，转成统一时间格式。
         pubdate = r.get("pubdate")
-        published = ""
-        if pubdate:
-            published = normalize_time(pubdate)
+        published = normalize_time(pubdate) if pubdate else ""
         return Post(
             platform="bilibili",
             title=title,
             text=desc or title,
-            url=url,
+            url=r.get("arcurl") or "",
             author=r.get("author") or "",
             published_at=published,
             source_adapter=self.name,
