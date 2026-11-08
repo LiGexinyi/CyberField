@@ -27,6 +27,7 @@ PLATFORM_LABELS = {
     "douyin": "抖音",
     "kuaishou": "快手",
     "tieba": "贴吧",
+    "douban": "豆瓣",
 }
 
 
@@ -49,7 +50,7 @@ class Post:
         title         帖子标题
         text          帖子正文 / 摘要
         url           原链接（溯源与去重依据）
-        author        作者昵称（各源默认已脱敏）
+        author        作者昵称（源数据，未经自动脱敏）
         published_at  发布时间（尽量规范为 YYYY-MM-DD HH:MM:SS）
         source_adapter 数据来自哪个适配器（追溯来源）
         keyword       由哪个搜索关键词采到
@@ -65,3 +66,14 @@ class Post:
     source_adapter: str
     keyword: str = ""
     extra: dict = field(default_factory=dict)
+
+    record_type: str = "post"
+
+    def __post_init__(self):
+        """统一时间并保留原始时间，避免不同源混排。"""
+        from collect.time_utils import normalize_time
+        self.extra = dict(self.extra or {})
+        if self.published_at:
+            self.extra.setdefault("published_at_raw", self.published_at)
+        self.published_at = normalize_time(self.published_at)
+        self.platform = normalize_platform(self.platform)

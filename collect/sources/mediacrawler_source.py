@@ -15,6 +15,8 @@ xhs / dy / ks / bili / wb / tieba / zhihu 七个平台的关键词搜索。
 
 import json
 import subprocess
+from collections import Counter
+from dataclasses import asdict
 from pathlib import Path
 
 from collect.post import Post, normalize_platform
@@ -50,12 +52,29 @@ class MediaCrawlerSource(BaseSource):
         code = self._resolve_code(platform)
         if code is None:
             return []  # 不支持的平台，静默返回空
+        if type(limit) is not int or limit <= 0:
+            raise ValueError("limit 必须为正整数")
+        # 比较运行前后的记录多重集合，追加同内容也算本次观察。
+        before = Counter(self._fingerprint(p) for p in self.load_results(keyword, code))
         result = self._run(keyword, code, limit)
         if result.returncode != 0:
             tail = (result.stdout or "")[-500:] + (result.stderr or "")[-500:]
             raise SourceUnavailable(
                 f"MediaCrawler 退出码 {result.returncode}，尾部输出：{tail.strip()}")
-        return self.load_results(keyword=keyword, platform_code=code)
+        fresh = []
+        for post in self.load_results(keyword=keyword, platform_code=code):
+            key = self._fingerprint(post)
+            if before[key]:
+                before[key] -= 1
+            else:
+                fresh.append(post)
+        return fresh[:limit]
+
+    @staticmethod
+    def _fingerprint(post):
+        """稳定序列化用于排除运行前已有记录；相同文件重写保守视作旧记录。"""
+        return json.dumps(asdict(post), ensure_ascii=False, sort_keys=True)
+
 
     def health_check(self) -> bool:
         return (self.mc_dir / "main.py").exists() and Path(self.mc_python).exists()
@@ -104,6 +123,8 @@ class MediaCrawlerSource(BaseSource):
                 try:
                     rec = json.loads(line)
                 except json.JSONDecodeError:
+                    continue
+                if not isinstance(rec, dict):
                     continue
                 if keyword is not None:
                     rec_kw = str(rec.get("source_keyword") or "").strip()

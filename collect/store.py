@@ -1,14 +1,11 @@
-"""统一采集入库与查询 / 统计。
-
-与主项目原有 posts_db.py（4 字段的 posts 表）互不影响：
-采集数据存入独立数据库 collect.db 的 collected_posts 表，
-字段更全（标题 / 作者 / 关键词 / 来源适配器），支持后续分析扩展。
-"""
-
+"""SQLite 存储：兼容旧库、只读查询，以及按采集时刻保存元数据快照。"""
+import json
 import sqlite3
+from collections import Counter
+from datetime import datetime, timezone
 from pathlib import Path
+from collect.time_utils import normalize_time
 
-# 采集库默认位置：项目根 data/collect.db（与清洗数据同目录；随代码增量新增，不触碰现有库）。
 DEFAULT_DB = Path(__file__).resolve().parent.parent / "data" / "collect.db"
 
 _SCHEMA = """
@@ -30,101 +27,97 @@ CREATE INDEX IF NOT EXISTS idx_cp_platform     ON collected_posts (platform);
 CREATE INDEX IF NOT EXISTS idx_cp_published_at ON collected_posts (published_at);
 """
 
-
-def _connect(db_path: Path | str):
-    db_path = Path(db_path)
-    db_path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(db_path)
+def _connect(db_path):
+    """仅写入时建表，附加表不覆盖旧记录。"""
+    path = Path(db_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(path)
     conn.executescript(_SCHEMA)
+    conn.execute("CREATE TABLE IF NOT EXISTS post_observations (id INTEGER PRIMARY KEY, post_id INTEGER NOT NULL, observed_at TEXT NOT NULL, keyword TEXT, record_type TEXT NOT NULL, extra_json TEXT NOT NULL)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_obs_post ON post_observations(post_id, id)")
     return conn
 
 
 def save_posts(posts, db_path=DEFAULT_DB):
-    """把统一 Post 列表幂等入库，返回 {"inserted":.., "skipped":..}。"""
+    """幂等保存帖子；每次入库独立记录互动快照，失败整批回滚。"""
+    posts = list(posts)
+    if any(not p.platform or not p.url or not p.url.strip() for p in posts):
+        raise ValueError("入库记录必须具有平台和非空来源链接")
     conn = _connect(db_path)
+    inserted = skipped = 0
     try:
-        inserted = skipped = 0
-        for p in posts:
-            cur = conn.execute(
-                "INSERT OR IGNORE INTO collected_posts "
-                "(keyword, platform, title, text, url, author, "
-                " published_at, source_adapter) VALUES (?,?,?,?,?,?,?,?)",
-                (p.keyword, p.platform, p.title, p.text, p.url,
-                 p.author, p.published_at, p.source_adapter),
-            )
-            if cur.rowcount == 1:
-                inserted += 1
-            else:
-                skipped += 1
-        conn.commit()
+        with conn:
+            for p in posts:
+                cur = conn.execute("INSERT OR IGNORE INTO collected_posts (keyword,platform,title,text,url,author,published_at,source_adapter) VALUES (?,?,?,?,?,?,?,?)", (p.keyword,p.platform,p.title,p.text,p.url,p.author,p.published_at,p.source_adapter))
+                inserted += int(cur.rowcount == 1)
+                skipped += int(cur.rowcount != 1)
+                pid = conn.execute("SELECT id FROM collected_posts WHERE platform=? AND url=?", (p.platform,p.url)).fetchone()[0]
+                # 使用 UTC 带时区时间；指标保存原值，不猜测单位或补零。
+                conn.execute("INSERT INTO post_observations(post_id,observed_at,keyword,record_type,extra_json) VALUES (?,?,?,?,?)", (pid,datetime.now(timezone.utc).isoformat(timespec="microseconds"),p.keyword,p.record_type,json.dumps(p.extra,ensure_ascii=False,allow_nan=False)))
         return {"inserted": inserted, "skipped": skipped}
     finally:
         conn.close()
 
 
-def query_posts(keyword: str | None = None, platform: str | None = None,
-                limit: int = 50, db_path=DEFAULT_DB):
-    """按关键词 / 平台过滤查询，按发布时间排序，返回 dict 列表。"""
-    conn = _connect(db_path)
+def export_rows(db_path=DEFAULT_DB):
+    """只读导出兼容视图：修正旧豆瓣语义，但不改变磁盘原始数据。"""
+    path = Path(db_path)
+    if not path.exists():
+        return []
+    conn = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)
+    conn.row_factory = sqlite3.Row
     try:
-        sql = ("SELECT keyword, platform, title, text, url, author, "
-               "published_at, source_adapter, fetched_at "
-               "FROM collected_posts WHERE 1=1")
-        params: list = []
-        if keyword:
-            sql += " AND (keyword LIKE ? OR title LIKE ? OR text LIKE ?)"
-            params += [f"%{keyword}%"] * 3
-        if platform:
-            sql += " AND platform = ?"
-            params.append(platform)
-        sql += " ORDER BY published_at DESC, id DESC LIMIT ?"
-        params.append(limit)
-        rows = conn.execute(sql, params).fetchall()
-        cols = ["keyword", "platform", "title", "text", "url", "author",
-                "published_at", "source_adapter", "fetched_at"]
-        return [dict(zip(cols, r)) for r in rows]
+        tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        if "collected_posts" not in tables:
+            return []
+        observations = {}
+        if "post_observations" in tables:
+            for row in conn.execute("SELECT * FROM post_observations ORDER BY id"):
+                observations.setdefault(row["post_id"], []).append(dict(row))
+        rows = []
+        for raw in conn.execute("SELECT * FROM collected_posts"):
+            row = dict(raw)
+            history = observations.get(row.pop("id"), [])
+            for observation in history:
+                observation["extra"] = json.loads(observation.pop("extra_json"))
+            row["observations"] = history
+            row["extra"] = dict(history[-1]["extra"]) if history else {}
+            row["record_type"] = history[-1]["record_type"] if history else "post"
+            row["keywords"] = sorted({row.get("keyword") or ""} | {h["keyword"] or "" for h in history})
+            if row["source_adapter"] == "douban_api":
+                row["record_type"] = "catalog_item"
+                # 历史字段仅保留为原值，不再参与发帖作者/时间统计。
+                row["extra"].setdefault("legacy_author", row["author"])
+                row["extra"].setdefault("legacy_published_at", row["published_at"])
+                row["author"] = row["published_at"] = ""
+            else:
+                row["extra"].setdefault("published_at_raw", row["published_at"])
+                row["published_at"] = normalize_time(row["published_at"])
+            rows.append(row)
+        return sorted(rows, key=lambda r: r["published_at"] or "", reverse=True)
     finally:
         conn.close()
+
+
+def query_posts(keyword=None, platform=None, limit=50, db_path=DEFAULT_DB):
+    """按字面关键词过滤；limit=None 返回全部，读取不建库。"""
+    if limit is not None and (type(limit) is not int or limit <= 0):
+        raise ValueError("limit 必须为正整数或 None")
+    rows = export_rows(db_path)
+    if keyword:
+        needle = keyword.casefold()
+        rows = [r for r in rows if needle in " ".join([*r["keywords"],r["title"] or "",r["text"] or ""]).casefold()]
+    if platform:
+        rows = [r for r in rows if r["platform"] == platform]
+    return rows if limit is None else rows[:limit]
 
 
 def stats(db_path=DEFAULT_DB):
-    """统计概览：总量 / 平台分布 / 关键词分布 / 作者 TOP / 互动合计。"""
-    conn = _connect(db_path)
-    try:
-        total = conn.execute("SELECT COUNT(*) FROM collected_posts").fetchone()[0]
-        by_platform = conn.execute(
-            "SELECT platform, COUNT(*) c FROM collected_posts GROUP BY platform "
-            "ORDER BY c DESC").fetchall()
-        by_keyword = conn.execute(
-            "SELECT COALESCE(NULLIF(keyword,''), '(未知)') k, COUNT(*) c "
-            "FROM collected_posts GROUP BY k ORDER BY c DESC").fetchall()
-        top_authors = conn.execute(
-            "SELECT author, COUNT(*) c FROM collected_posts "
-            "WHERE author != '' GROUP BY author ORDER BY c DESC LIMIT 10").fetchall()
-        time_range = conn.execute(
-            "SELECT MIN(published_at), MAX(published_at) "
-            "FROM collected_posts WHERE published_at != ''").fetchone()
-        return {
-            "total": total,
-            "by_platform": [dict(platform=r[0], count=r[1]) for r in by_platform],
-            "by_keyword": [dict(keyword=r[0], count=r[1]) for r in by_keyword],
-            "top_authors": [dict(author=r[0], count=r[1]) for r in top_authors],
-            "published_range": {"min": time_range[0], "max": time_range[1]},
-        }
-    finally:
-        conn.close()
-
-
-def export_rows(db_path=DEFAULT_DB):
-    """导出全部记录（供 CSV / JSON 序列化）。"""
-    conn = _connect(db_path)
-    try:
-        cols = ["keyword", "platform", "title", "text", "url", "author",
-                "published_at", "source_adapter", "fetched_at"]
-        rows = conn.execute(
-            "SELECT keyword, platform, title, text, url, author, "
-            "published_at, source_adapter, fetched_at FROM collected_posts "
-            "ORDER BY published_at DESC").fetchall()
-        return [dict(zip(cols, r)) for r in rows]
-    finally:
-        conn.close()
+    """统计样本分布；影视条目不计入发帖作者和时间范围。"""
+    rows = export_rows(db_path)
+    posts = [r for r in rows if r["record_type"] == "post"]
+    dates = [r["published_at"] for r in posts if r["published_at"]]
+    platforms = Counter(r["platform"] for r in rows)
+    keywords = Counter(k for r in rows for k in r["keywords"] if k)
+    authors = Counter((r["platform"], r["author"]) for r in posts if r["author"])
+    return {"total":len(rows), "by_platform":[{"platform":k,"count":v} for k,v in platforms.most_common()], "by_keyword":[{"keyword":k,"count":v} for k,v in keywords.most_common()], "top_authors":[{"author":a,"platform":p,"count":v} for (p,a),v in authors.most_common(10)], "published_range":{"min":min(dates) if dates else None,"max":max(dates) if dates else None}}
