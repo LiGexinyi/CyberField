@@ -620,6 +620,37 @@ CyberField 最初作为清华大学《AI 编程进阶：方法与实践》课程
 - 说明：实时搜索默认 limit=20（B站/豆瓣单页），想更多可稍后调大 limit；
   高频率搜索仍受豆瓣 need_login / 微博游客态限制，适配器已有降级保护。
 
+### 2026-11-09：评论筛选 + OCR 图片文字识别 + 批量采集增强
+- 需求：评论是次要数据（只留高质量：点赞高 / 内容长 / 互动讨论多，剔除
+  `@` 拉人看的无效评论）；小红书笔记大量观点输出在图片里，配置轻量 OCR
+  小模型识别图片文字参与分析；前端工作台展示效果。
+- 评论筛选（`collect/sources/mediacrawler_source.py`）：
+  - `load_results` 同时读取 `search_contents_*.jsonl`（笔记）与
+    `search_comments_*.jsonl`（评论）；评论按 点赞≥100（解析「万」）/
+    长度≥50字 / 讨论≥30 任选达标筛选，剔除含 `@` 的评论，每笔记最多 2 条，
+    总量不超过笔记的 1/3；
+  - 高质量评论作为独立 Post 入库：`record_type="comment"`，url 带
+    `#comment-{id}` 保证与笔记去重键不冲突；点赞数解析「1.4万→14000」；
+  - 修复 JSONL 跨运行累积导致的重复：按 (platform,url) 去重后再返回。
+- OCR 小模型（新增 `collect/ocr.py`，RapidOCR onnx CPU 版）：
+  - 懒加载引擎、按图片 URL 缓存识别结果、失败降级不中断采集；
+  - 适配器 `MediaCrawlerSource(ocr=True)` 开启：图片文字存入
+    `extra["ocr_text"]`（独立字段，不污染原文）；
+  - 实测：24 条笔记中 9 条图片含文字，「坏猫年度总结：今年共向妈妈齿此牙
+    128次…闯祸365天战绩全网可查」完整识别，~1 秒/图。
+- 批量工具（`collect/batch_collect.py`）：新增 `--ocr` 开关，配合
+  `--platforms xhs --sources mediacrawler` 使用；`collect/orchestrator.py`
+  `source_kwargs` 支持「按源名传参」（`{"mediacrawler": {"ocr": True}}`），
+  不影响其他源的构造参数。
+- 前端（`web/app.js` / `web/style.css`）：详情页新增「图片文字（OCR 识别）」
+  区块（`record_type="comment"` 显示为「评论」类型标签）。
+- 验证：评论筛选后 24 笔记 + 7 高赞评论（占比 22%）入库成功；按源传参
+  monkeypatch 验证通过；OCR→清洗→入库后库中 9 条带 ocr_text，浏览器实测
+  详情页 OCR 区块正常展示。提交：`ecc2b00`（评论筛选）、`ef9f025`（OCR
+  模块）、`c1edf12`（OCR 全链路 + 前端）。
+- 待办：B站/微博账号登录态采集（MediaCrawler bili/wb）；批量关键词组确认后
+  启动大规模采集。
+
 ## 本地 Web 工作台启动
 在项目根运行（PowerShell）：
 ```powershell
