@@ -1,12 +1,12 @@
 # CyberField 项目代码全览
 
-> 生成时间：2026-11-07
+> 生成时间：2026-11-07（2026-11-08 增量更新：新增 B站/豆瓣/微博 游客态源）
 > 来源：D:\Projects\CyberField（主项目 + collect/ 多源采集框架）
 > 用途：项目全部代码的整理归档，便于整体查看与评审
 
 ---
 
-## 一、代码文件清单（12 个文件，共约 1638 行）
+## 一、代码文件清单（25 个文件，共约 2690 行）
 
 | 文件 | 行数 | 用途 | 验证状态 |
 | --- | --- | --- | --- |
@@ -14,38 +14,67 @@
 | `test_clean_posts.py` | 218 | clean_posts 的独立测试（不依赖样本数据） | ✅ 7/7 通过 |
 | `posts_db.py` | 227 | SQLite 存储与关键词查询（自 cp2_B 合并） | ✅ 13 项测试通过 |
 | `test_posts_db.py` | 400 | posts_db 的 13 项独立测试 | ✅ 13/13 通过 |
-| `collect/__init__.py` | 14 | 采集模块说明与结构注释 | — |
-| `collect/post.py` | 67 | 统一数据契约 Post + 平台名规范化 | ✅ 自测通过 |
-| `collect/orchestrator.py` | 72 | 多源调度：调用→合并→去重→入库 | ✅ 自测通过 |
-| `collect/store.py` | 130 | 采集库入库/查询/统计/导出 | ✅ 自测通过 |
-| `collect/demo_cli.py` | 186 | 终端交互式 Demo（采集/浏览/统计/导出） | ✅ 全链路演示通过 |
-| `collect/sources/__init__.py` | 17 | 适配器注册表（新源在此登记） | ✅ 自测通过 |
+| `test_collect_data.py` | 100 | 数据契约/旧库兼容/观察快照/时间/采集隔离回归 | ✅ 8 项通过 |
+| `test_collect_regressions.py` | 55 | 采集边界回归（空正文/健康检查/链接/limit/关键词） | ✅ 5 项通过 |
+| `collect/__init__.py` | 18 | 采集模块说明与结构注释 | — |
+| `collect/post.py` | 79 | 统一数据契约 Post（record_type/时间统一/平台规范化） | ✅ 测试覆盖 |
+| `collect/cleaner.py` | 59 | 采集数据清洗（删空文本/去重/时间排序） | ✅ 单元测试通过 |
+| `collect/time_utils.py` | 27 | 统一北京时间（时间戳/ISO/RFC → 固定格式，未知留空） | ✅ 测试覆盖 |
+| `collect/orchestrator.py` | 104 | 多源调度：调用→合并→去重→清洗→（可选）入库 | ✅ 回归通过 |
+| `collect/store.py` | 123 | 采集库读写 + post_observations 观察快照 + 只读兼容导出 | ✅ 测试覆盖 |
+| `collect/web_app.py` | 146 | 本地工作台：静态页面 + /api/posts + 实时搜索/手动入库 | ✅ 全链路通过 |
+| `collect/demo_cli.py` | 247 | 终端交互式 Demo（浏览器模式/采集/浏览/统计/导出） | ✅ 全链路演示通过 |
+| `collect/backfill_douban.py` | 11 | 豆瓣只读核对（语义修正后不再回填作者/时间） | ✅ 语义隔离 |
+| `collect/sources/__init__.py` | 23 | 适配器注册表（新源在此登记） | ✅ 自测通过 |
 | `collect/sources/base_source.py` | 41 | BaseSource 抽象接口 + SourceUnavailable | ✅ 自测通过 |
-| `collect/sources/mediacrawler_source.py` | 141 | MediaCrawler 适配器（子进程调用+JSONL解析） | ✅ 自测通过 |
+| `collect/sources/mediacrawler_source.py` | 162 | MediaCrawler 适配器（子进程+JSONL+前后差分排除历史） | ✅ 测试覆盖 |
+| `collect/sources/http_client.py` | 89 | 轻量 HTTP 会话（标准库：Cookie/Referer/gzip） | ✅ 自测通过 |
+| `collect/sources/bilibili_source.py` | 103 | B站游客态搜索适配器（免登录，支持翻页） | ✅ 真实采集通过 |
+| `collect/sources/douban_source.py` | 139 | 豆瓣 rexxar 搜索（免登录，翻页+need_login降级，catalog_item） | ✅ 真实采集通过 |
+| `collect/sources/weibo_source.py` | 153 | 微博访客激活搜索适配器（免登录） | ✅ 真实采集通过 |
+| `web/index.html` | 12 | 前端页面（实时搜索/资料浏览/观察分析三视图） | ✅ 浏览器实测 |
+| `web/app.js` | 20 | 前端逻辑（实时搜索/渲染/手动入库确认） | ✅ 浏览器实测 |
+| `web/style.css` | 7 | 前端样式（响应式，含实时搜索视图） | ✅ 浏览器实测 |
 
-**测试汇总：** 20/20 全部断言通过（posts_db 13 项 + clean_posts 7 项）。
+**测试汇总：** 33/33 全部断言通过（clean_posts 7 + posts_db 13 + collect_data 8 + regressions 5）；
+游客态源真实采集入库通过；Web 全链路（实时搜索→手动入库→浏览）实测通过。
 
 ## 二、模块架构
 
 ```
-主项目（原有功能，未改动）
+主项目（原有功能）
 ├── clean_posts.py ── CSV 清洗（空文本/去重/排序）
-└── posts_db.py ──── SQLite 存储 + 关键词查询（4 字段 posts 表，独立于采集库）
+├── posts_db.py ──── SQLite 存储 + 关键词查询（独立于采集库）
+└── test_*.py ────── 共 33 项测试（含 Codex 新增 13 项）
 
-collect/（增量新增，薄适配器层）
-├── post.py ────────────────── 统一数据契约 Post
+collect/（多源采集框架 + 数据语义）
+├── post.py ────────────────── 统一数据契约 Post（record_type / 时间统一）
+├── cleaner.py ─────────────── 采集数据清洗（删空文本/去重/时间排序）
+├── time_utils.py ──────────── 统一北京时间（时间戳/ISO/RFC → 固定格式）
 ├── sources/base_source.py ─── BaseSource 接口 + SourceUnavailable 异常
-├── sources/mediacrawler_source.py ─ MediaCrawler 适配器
+├── sources/http_client.py ─── 轻量 HTTP 会话（标准库，Cookie/Referer/gzip）
+├── sources/mediacrawler_source.py ─ MediaCrawler 适配器（需登录，前后差分）
+├── sources/bilibili_source.py ── B站游客态搜索（免登录，可翻页）
+├── sources/douban_source.py ──── 豆瓣 rexxar 搜索（免登录，翻页+降级，catalog_item）
+├── sources/weibo_source.py ───── 微博访客激活搜索（免登录）
 ├── sources/__init__.py ────── 适配器注册表（name -> 工厂）
-├── orchestrator.py ────────── 多源调度 / 合并 / 去重 / 入库
-├── store.py ───────────────── collect.db 的 collected_posts 表（9 字段）
-└── demo_cli.py ────────────── 终端交互式 Demo 入口
+├── orchestrator.py ────────── 多源调度 / 合并 / 去重 / 清洗 / 可选入库
+├── store.py ───────────────── 采集库读写 + post_observations 观察快照 + 只读导出
+├── web_app.py ─────────────── 本地工作台：静态页面 + /api/posts + 实时搜索/手动入库
+├── backfill_douban.py ─────── 豆瓣只读核对（不再回填）
+└── demo_cli.py ────────────── 终端交互式 Demo 入口（浏览器模式）
 
-数据流：
-demo_cli / 任意调用 → orchestrator.collect(keyword)
-    → 逐个源 search(keyword) → Post 列表
-    → 按 (platform, url) 去重 → store.save_posts 入库
-    → demo_cli 浏览 / 统计 / 导出
+web/（响应式前端，无构建、无外部 CDN）
+├── index.html ─── 三视图：实时搜索 / 资料浏览 / 观察与分析
+├── app.js ─────── 实时搜索 + 渲染 + 手动入库确认
+└── style.css ──── 样式（含搜索视图）
+
+数据流（两种入口殊途同归）：
+demo_cli 直接关键词 / web 前端 POST /api/search
+    → orchestrator.collect(keyword, platforms, save=False) 实时采集（浏览器模式）
+    → 逐个源 search(keyword) → Post 列表 → 去重 → cleaner 清洗
+    → 临时结果：CLI 直接展示；Web 端缓存内存，等用户点「手动入库」
+    → 确认后 store.save_posts 写库（每条追加观察快照）→ 前端 /api/posts 浏览
 ```
 
 **设计要点：**
@@ -1049,7 +1078,7 @@ if __name__ == "__main__":
     run_all()
 ```
 
-### 5. `collect/__init__.py`（14 行）
+### 5. `collect/__init__.py`（18 行）
 
 ```python
 """CyberField 多源采集模块。
@@ -1060,15 +1089,21 @@ if __name__ == "__main__":
 
 模块结构：
 - post.py                  统一数据契约 Post 与平台名规范化
+- cleaner.py               采集数据清洗（删空文本/去重/时间排序）
 - sources/base_source.py   BaseSource 抽象接口 + 异常
-- sources/mediacrawler_source.py  MediaCrawler 适配器
-- orchestrator.py          多源调度 / 合并 / 去重
+- sources/http_client.py   轻量 HTTP 会话（标准库，Cookie/Referer/gzip）
+- sources/mediacrawler_source.py  MediaCrawler 适配器（需登录）
+- sources/bilibili_source.py     B站游客态搜索适配器（免登录，可翻页）
+- sources/douban_source.py       豆瓣移动端 rexxar 搜索适配器（免登录，翻页+降级）
+- sources/weibo_source.py        微博访客激活搜索适配器（免登录）
+- orchestrator.py          多源调度 / 合并 / 去重 / 清洗 / 可选入库
 - store.py                 统一入库（collected_posts 表）与查询/统计
-- demo_cli.py              终端交互式浏览试用入口
+- backfill_douban.py       豆瓣历史记录作者/时间回填工具（一次性）
+- demo_cli.py              终端交互式浏览试用入口（浏览器模式）
 """
 ```
 
-### 6. `collect/post.py`（67 行）
+### 6. `collect/post.py`（79 行）
 
 ```python
 """统一帖子数据契约（Post）与平台名规范化。
@@ -1100,6 +1135,7 @@ PLATFORM_LABELS = {
     "douyin": "抖音",
     "kuaishou": "快手",
     "tieba": "贴吧",
+    "douban": "豆瓣",
 }
 
 
@@ -1122,11 +1158,12 @@ class Post:
         title         帖子标题
         text          帖子正文 / 摘要
         url           原链接（溯源与去重依据）
-        author        作者昵称（各源默认已脱敏）
-        published_at  发布时间（尽量规范为 YYYY-MM-DD HH:MM:SS）
+        author        作者昵称（源数据，未经自动脱敏）
+        published_at  发布时间（统一为北京时间 YYYY-MM-DD HH:MM:SS）
         source_adapter 数据来自哪个适配器（追溯来源）
         keyword       由哪个搜索关键词采到
         extra         平台附加数据（互动数等，统计时可选使用）
+        record_type   "post"=社交帖子 / "catalog_item"=影视条目（豆瓣等）
     """
 
     platform: str
@@ -1138,16 +1175,28 @@ class Post:
     source_adapter: str
     keyword: str = ""
     extra: dict = field(default_factory=dict)
+
+    record_type: str = "post"
+
+    def __post_init__(self):
+        """统一时间并保留原始时间，避免不同源混排。"""
+        from collect.time_utils import normalize_time
+        self.extra = dict(self.extra or {})
+        if self.published_at:
+            self.extra.setdefault("published_at_raw", self.published_at)
+        self.published_at = normalize_time(self.published_at)
+        self.platform = normalize_platform(self.platform)
 ```
 
-### 7. `collect/orchestrator.py`（72 行）
+### 7. `collect/orchestrator.py`（104 行）
 
 ```python
-"""多源调度器：并行调所有启用源 → 合并 → 去重 → 入库。
+"""多源调度器：依次调用所有启用源 → 合并 → 去重 → 清洗 →（可选）入库。
 
 容错约定：
 - 单个源失败（SourceUnavailable）→ 记录原因、跳过该源，其余源照常；
 - 结果按 (platform, url) 去重，保证"多源冗余"不会重复入库；
+- 清洗（collect.cleaner）删除空文本并再兜底去重后，才决定是否入库；
 - 每条记录带 source_adapter 与 keyword，可追溯。
 """
 
@@ -1162,24 +1211,35 @@ logger = logging.getLogger(__name__)
 def collect(keyword: str,
             platforms: tuple = ("xhs",),
             limit: int = 20,
-            source_names: tuple = ("mediacrawler",),
+            source_names: tuple | None = None,
             source_kwargs: dict | None = None,
-            save: bool = True):
+            save: bool = True,
+            clean: bool = True):
     """执行一次多源采集。
 
     参数：
         keyword       搜索关键词
-        platforms     MediaCrawler 平台码元组（xhs / bili / wb / zhihu ...）
+        platforms     平台码元组（MediaCrawler 码 xhs/bili/wb/zhihu/douban ...）
         limit         每个平台最多采集条数
-        source_names  启用的适配器名
+        source_names  启用的适配器名元组；None 表示全部已注册源
         source_kwargs 传给适配器构造器的参数（如 mc_dir / mc_python）
-        save          是否入库（默认入库）
+        save          是否入库（默认入库；False = 浏览器模式，用完即弃）
+        clean         是否清洗后再返回（默认清洗：删空文本 + 兜底去重 + 排序）
     返回：
         (posts, errors, summary)
-        posts  去重后的统一 Post 列表
+        posts  去重+清洗后的统一 Post 列表
         errors 各源失败原因列表
-        summary 入库统计（save=False 时为 None）
+        summary 入库/清洗统计；save=False 时只含清洗统计
     """
+    if not isinstance(keyword, str) or not keyword.strip():
+        raise ValueError("关键词不能为空")
+    if type(limit) is not int or limit <= 0:
+        raise ValueError("limit 必须为正整数")
+    keyword = keyword.strip()
+    # 默认启用全部已注册源：新源登记进 AVAILABLE_SOURCES 后自动参与调度。
+    if source_names is None:
+        from collect.sources import AVAILABLE_SOURCES
+        source_names = tuple(AVAILABLE_SOURCES.keys())
     errors: list[str] = []
     posts = []
     for name in source_names:
@@ -1188,7 +1248,12 @@ def collect(keyword: str,
         except Exception as exc:  # 适配器构造失败，记录并跳过
             errors.append(f"{name}: 初始化失败 {exc}")
             continue
-        if not src.health_check():
+        try:
+            healthy = src.health_check()
+        except Exception as exc:
+            errors.append(f"{name}: 健康检查异常 {exc}")
+            continue
+        if not healthy:
             errors.append(f"{name}: 健康检查失败（工具缺失或路径错误）")
             continue
         for platform in platforms:
@@ -1201,36 +1266,48 @@ def collect(keyword: str,
             except Exception as exc:
                 errors.append(f"{src.name}/{platform}: 意外异常 {exc}")
 
-    # 按 (platform, url) 去重，保留首次出现。
-    seen, uniq = set(), []
-    for p in posts:
-        key = (p.platform, p.url)
-        if key not in seen:
-            seen.add(key)
-            uniq.append(p)
+    # 先过滤空正文再去重，避免空记录抢占有效记录的链接。
+    from collect import cleaner
+    if clean:
+        uniq, cstats = cleaner.clean_posts(posts)
+        clean_stats = {k: cstats[k] for k in ("empty_removed", "dup_removed")}
+    else:
+        uniq, seen = [], set()
+        for p in posts:
+            key = (p.platform, p.url) if p.url else id(p)
+            if key not in seen:
+                seen.add(key)
+                uniq.append(p)
+        clean_stats = {"empty_removed": 0, "dup_removed": len(posts) - len(uniq)}
+    # 多个适配器合并后仍遵守每平台数量上限。
+    counts, bounded = {}, []
+    for p in uniq:
+        if counts.get(p.platform, 0) < limit:
+            bounded.append(p)
+            counts[p.platform] = counts.get(p.platform, 0) + 1
+    uniq = bounded
 
-    summary = None
+    summary = {"inserted": 0, "skipped": 0, **clean_stats}
     if save and uniq:
         from collect import store
-        summary = store.save_posts(uniq)
+        saved = store.save_posts(uniq)
+        summary["inserted"] = saved["inserted"]
+        summary["skipped"] = saved["skipped"]
 
     return uniq, errors, summary
 ```
 
-### 8. `collect/store.py`（130 行）
+### 8. `collect/store.py`（123 行）
 
 ```python
-"""统一采集入库与查询 / 统计。
-
-与主项目原有 posts_db.py（4 字段的 posts 表）互不影响：
-采集数据存入独立数据库 collect.db 的 collected_posts 表，
-字段更全（标题 / 作者 / 关键词 / 来源适配器），支持后续分析扩展。
-"""
-
+"""SQLite 存储：兼容旧库、只读查询，以及按采集时刻保存元数据快照。"""
+import json
 import sqlite3
+from collections import Counter
+from datetime import datetime, timezone
 from pathlib import Path
+from collect.time_utils import normalize_time
 
-# 采集库默认位置：项目根 data/collect.db（与清洗数据同目录；随代码增量新增，不触碰现有库）。
 DEFAULT_DB = Path(__file__).resolve().parent.parent / "data" / "collect.db"
 
 _SCHEMA = """
@@ -1252,107 +1329,103 @@ CREATE INDEX IF NOT EXISTS idx_cp_platform     ON collected_posts (platform);
 CREATE INDEX IF NOT EXISTS idx_cp_published_at ON collected_posts (published_at);
 """
 
-
-def _connect(db_path: Path | str):
-    db_path = Path(db_path)
-    db_path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(db_path)
+def _connect(db_path):
+    """仅写入时建表，附加表不覆盖旧记录。"""
+    path = Path(db_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(path)
     conn.executescript(_SCHEMA)
+    conn.execute("CREATE TABLE IF NOT EXISTS post_observations (id INTEGER PRIMARY KEY, post_id INTEGER NOT NULL, observed_at TEXT NOT NULL, keyword TEXT, record_type TEXT NOT NULL, extra_json TEXT NOT NULL)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_obs_post ON post_observations(post_id, id)")
     return conn
 
 
 def save_posts(posts, db_path=DEFAULT_DB):
-    """把统一 Post 列表幂等入库，返回 {"inserted":.., "skipped":..}。"""
+    """幂等保存帖子；每次入库独立记录互动快照，失败整批回滚。"""
+    posts = list(posts)
+    if any(not p.platform or not p.url or not p.url.strip() for p in posts):
+        raise ValueError("入库记录必须具有平台和非空来源链接")
     conn = _connect(db_path)
+    inserted = skipped = 0
     try:
-        inserted = skipped = 0
-        for p in posts:
-            cur = conn.execute(
-                "INSERT OR IGNORE INTO collected_posts "
-                "(keyword, platform, title, text, url, author, "
-                " published_at, source_adapter) VALUES (?,?,?,?,?,?,?,?)",
-                (p.keyword, p.platform, p.title, p.text, p.url,
-                 p.author, p.published_at, p.source_adapter),
-            )
-            if cur.rowcount == 1:
-                inserted += 1
-            else:
-                skipped += 1
-        conn.commit()
+        with conn:
+            for p in posts:
+                cur = conn.execute("INSERT OR IGNORE INTO collected_posts (keyword,platform,title,text,url,author,published_at,source_adapter) VALUES (?,?,?,?,?,?,?,?)", (p.keyword,p.platform,p.title,p.text,p.url,p.author,p.published_at,p.source_adapter))
+                inserted += int(cur.rowcount == 1)
+                skipped += int(cur.rowcount != 1)
+                pid = conn.execute("SELECT id FROM collected_posts WHERE platform=? AND url=?", (p.platform,p.url)).fetchone()[0]
+                # 使用 UTC 带时区时间；指标保存原值，不猜测单位或补零。
+                conn.execute("INSERT INTO post_observations(post_id,observed_at,keyword,record_type,extra_json) VALUES (?,?,?,?,?)", (pid,datetime.now(timezone.utc).isoformat(timespec="microseconds"),p.keyword,p.record_type,json.dumps(p.extra,ensure_ascii=False,allow_nan=False)))
         return {"inserted": inserted, "skipped": skipped}
     finally:
         conn.close()
 
 
-def query_posts(keyword: str | None = None, platform: str | None = None,
-                limit: int = 50, db_path=DEFAULT_DB):
-    """按关键词 / 平台过滤查询，按发布时间排序，返回 dict 列表。"""
-    conn = _connect(db_path)
+def export_rows(db_path=DEFAULT_DB):
+    """只读导出兼容视图：修正旧豆瓣语义，但不改变磁盘原始数据。"""
+    path = Path(db_path)
+    if not path.exists():
+        return []
+    conn = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)
+    conn.row_factory = sqlite3.Row
     try:
-        sql = ("SELECT keyword, platform, title, text, url, author, "
-               "published_at, source_adapter, fetched_at "
-               "FROM collected_posts WHERE 1=1")
-        params: list = []
-        if keyword:
-            sql += " AND (keyword LIKE ? OR title LIKE ? OR text LIKE ?)"
-            params += [f"%{keyword}%"] * 3
-        if platform:
-            sql += " AND platform = ?"
-            params.append(platform)
-        sql += " ORDER BY published_at DESC, id DESC LIMIT ?"
-        params.append(limit)
-        rows = conn.execute(sql, params).fetchall()
-        cols = ["keyword", "platform", "title", "text", "url", "author",
-                "published_at", "source_adapter", "fetched_at"]
-        return [dict(zip(cols, r)) for r in rows]
+        tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        if "collected_posts" not in tables:
+            return []
+        observations = {}
+        if "post_observations" in tables:
+            for row in conn.execute("SELECT * FROM post_observations ORDER BY id"):
+                observations.setdefault(row["post_id"], []).append(dict(row))
+        rows = []
+        for raw in conn.execute("SELECT * FROM collected_posts"):
+            row = dict(raw)
+            history = observations.get(row.pop("id"), [])
+            for observation in history:
+                observation["extra"] = json.loads(observation.pop("extra_json"))
+            row["observations"] = history
+            row["extra"] = dict(history[-1]["extra"]) if history else {}
+            row["record_type"] = history[-1]["record_type"] if history else "post"
+            row["keywords"] = sorted({row.get("keyword") or ""} | {h["keyword"] or "" for h in history})
+            if row["source_adapter"] == "douban_api":
+                row["record_type"] = "catalog_item"
+                # 历史字段仅保留为原值，不再参与发帖作者/时间统计。
+                row["extra"].setdefault("legacy_author", row["author"])
+                row["extra"].setdefault("legacy_published_at", row["published_at"])
+                row["author"] = row["published_at"] = ""
+            else:
+                row["extra"].setdefault("published_at_raw", row["published_at"])
+                row["published_at"] = normalize_time(row["published_at"])
+            rows.append(row)
+        return sorted(rows, key=lambda r: r["published_at"] or "", reverse=True)
     finally:
         conn.close()
+
+
+def query_posts(keyword=None, platform=None, limit=50, db_path=DEFAULT_DB):
+    """按字面关键词过滤；limit=None 返回全部，读取不建库。"""
+    if limit is not None and (type(limit) is not int or limit <= 0):
+        raise ValueError("limit 必须为正整数或 None")
+    rows = export_rows(db_path)
+    if keyword:
+        needle = keyword.casefold()
+        rows = [r for r in rows if needle in " ".join([*r["keywords"],r["title"] or "",r["text"] or ""]).casefold()]
+    if platform:
+        rows = [r for r in rows if r["platform"] == platform]
+    return rows if limit is None else rows[:limit]
 
 
 def stats(db_path=DEFAULT_DB):
-    """统计概览：总量 / 平台分布 / 关键词分布 / 作者 TOP / 互动合计。"""
-    conn = _connect(db_path)
-    try:
-        total = conn.execute("SELECT COUNT(*) FROM collected_posts").fetchone()[0]
-        by_platform = conn.execute(
-            "SELECT platform, COUNT(*) c FROM collected_posts GROUP BY platform "
-            "ORDER BY c DESC").fetchall()
-        by_keyword = conn.execute(
-            "SELECT COALESCE(NULLIF(keyword,''), '(未知)') k, COUNT(*) c "
-            "FROM collected_posts GROUP BY k ORDER BY c DESC").fetchall()
-        top_authors = conn.execute(
-            "SELECT author, COUNT(*) c FROM collected_posts "
-            "WHERE author != '' GROUP BY author ORDER BY c DESC LIMIT 10").fetchall()
-        time_range = conn.execute(
-            "SELECT MIN(published_at), MAX(published_at) "
-            "FROM collected_posts WHERE published_at != ''").fetchone()
-        return {
-            "total": total,
-            "by_platform": [dict(platform=r[0], count=r[1]) for r in by_platform],
-            "by_keyword": [dict(keyword=r[0], count=r[1]) for r in by_keyword],
-            "top_authors": [dict(author=r[0], count=r[1]) for r in top_authors],
-            "published_range": {"min": time_range[0], "max": time_range[1]},
-        }
-    finally:
-        conn.close()
-
-
-def export_rows(db_path=DEFAULT_DB):
-    """导出全部记录（供 CSV / JSON 序列化）。"""
-    conn = _connect(db_path)
-    try:
-        cols = ["keyword", "platform", "title", "text", "url", "author",
-                "published_at", "source_adapter", "fetched_at"]
-        rows = conn.execute(
-            "SELECT keyword, platform, title, text, url, author, "
-            "published_at, source_adapter, fetched_at FROM collected_posts "
-            "ORDER BY published_at DESC").fetchall()
-        return [dict(zip(cols, r)) for r in rows]
-    finally:
-        conn.close()
+    """统计样本分布；影视条目不计入发帖作者和时间范围。"""
+    rows = export_rows(db_path)
+    posts = [r for r in rows if r["record_type"] == "post"]
+    dates = [r["published_at"] for r in posts if r["published_at"]]
+    platforms = Counter(r["platform"] for r in rows)
+    keywords = Counter(k for r in rows for k in r["keywords"] if k)
+    authors = Counter((r["platform"], r["author"]) for r in posts if r["author"])
+    return {"total":len(rows), "by_platform":[{"platform":k,"count":v} for k,v in platforms.most_common()], "by_keyword":[{"keyword":k,"count":v} for k,v in keywords.most_common()], "top_authors":[{"author":a,"platform":p,"count":v} for (p,a),v in authors.most_common(10)], "published_range":{"min":min(dates) if dates else None,"max":max(dates) if dates else None}}
 ```
 
-### 9. `collect/demo_cli.py`（186 行）
+### 9. `collect/demo_cli.py`（247 行）
 
 ```python
 """CyberField 多源采集 Demo —— 终端交互式浏览试用（无图形界面）。
@@ -1363,14 +1436,18 @@ def export_rows(db_path=DEFAULT_DB):
     python collect/demo_cli.py
 
 菜单：
-    [1] 采集新关键词   调用 MediaCrawler 真实搜索（首次需扫码登录）
+    [1] 采集新关键词   调用各适配器真实搜索（可多平台、多源；询问是否入库）
     [2] 浏览本地库     查看已采集帖子（可按关键词/平台过滤）
     [3] 统计概览       平台分布 / 关键词分布 / 作者 TOP / 时间范围
     [4] 导出 CSV/JSON  导出本地库全部记录
     [5] 退出
-    也可以直接输入一个关键词，等价于执行 [1]。
+    也可以直接输入一个关键词：浏览器模式采集（清洗后展示、不入库，用完即弃）。
 
-说明：本次 Demo 接入的第一个源是 MediaCrawler（外部开源工具），
+说明：已接入的源——
+    mediacrawler  外部工具 MediaCrawler（小红书/B站/微博/知乎等，需扫码登录）
+    bilibili_api  B站游客态公开搜索接口（免登录）
+    douban_api    豆瓣移动端公开搜索接口（免登录）
+    weibo_api     微博游客态公开搜索接口（访客激活，免登录）
 将来新增源只需在 collect/sources/ 注册新适配器，本入口不变。
 """
 
@@ -1392,13 +1469,18 @@ BANNER = r"""
 | || | __| | | |__| __  | |__  ___ _| |_| |
 | __ | _|  | | / /| __ -| '_ \/ -_) | | . |
 |_||_|_|   |_|_\_\|_____|_.__/\___|_\_|___|
-  多源采集 Demo · 终端试用版（首个源：MediaCrawler）
+  多源采集 Demo · 终端试用版（源：MediaCrawler / B站 / 豆瓣 / 微博游客态）
 """
 
 MENU = """
   [1] 采集新关键词    [2] 浏览本地库    [3] 统计概览
   [4] 导出 CSV/JSON   [5] 退出
-  直接输入关键词 = 执行采集。输入 ? 查看帮助。"""
+  直接输入关键词 = 浏览器模式采集。输入 ? 查看帮助。"""
+
+
+def _clean(s: str) -> str:
+    """清理用户输入：去 BOM / 零宽字符，再 trim（防止粘贴文本带隐形字符）。"""
+    return s.strip().lstrip("\ufeff").strip()
 
 
 def _fmt_el(s: str, width: int) -> str:
@@ -1415,46 +1497,98 @@ def _fmt_el(s: str, width: int) -> str:
     return "".join(out)
 
 
-def _print_table(rows: list[dict], limit: int = 30):
-    """打印帖子列表：平台 | 作者 | 时间 | 标题 | 链接。"""
+def _print_table(rows: list[dict], limit: int = 30, pageable: bool = False):
+    """打印帖子列表：平台 | 作者 | 时间 | 标题 | 链接。
+
+    limit  每页条数（默认 30）。
+    pageable 为 True 时，超出 limit 进入交互分页：
+        回车 = 下一页；q = 返回；数字 = 跳到第 N 条。
+    为 False 时保持旧行为：只打印前 limit 条并提示未显示条数。
+    """
     if not rows:
         print("  （无记录）")
         return
-    show = rows[:limit]
-    print(f"  {len(rows)} 条记录，显示前 {min(limit, len(rows))} 条：")
-    for r in show:
-        title = _fmt_el(r.get("title") or "(无标题)", 30)
-        author = _fmt_el(r.get("author") or "-", 12)
-        time = _fmt_el(r.get("published_at") or "-", 19)
-        url = _fmt_el(r.get("url") or "", 46)
-        print(f"    [{platform_label(r.get('platform') or r['platform'])}] "
-              f"{author} | {time}")
-        print(f"      {title}")
-        print(f"      {url}")
-    if len(rows) > limit:
-        print(f"  …其余 {len(rows) - limit} 条未显示（浏览命令可缩小过滤范围）")
+    total = len(rows)
+    page = 0
+    while True:
+        start = page * limit
+        end = min(start + limit, total)
+        print(f"  {total} 条记录，显示第 {start + 1}~{end} 条：")
+        for r in rows[start:end]:
+            title = _fmt_el(r.get("title") or "(无标题)", 30)
+            author = _fmt_el(r.get("author") or "-", 12)
+            time = _fmt_el(r.get("published_at") or "-", 19)
+            url = _fmt_el(r.get("url") or "", 46)
+            print(f"    [{platform_label(r.get('platform') or r['platform'])}] "
+                  f"{author} | {time}")
+            print(f"      {title}")
+            print(f"      {url}")
+        if end >= total:
+            return
+        if not pageable:
+            print(f"  …其余 {total - end} 条未显示（浏览命令可缩小过滤范围）")
+            return
+        cmd = _clean(input(
+            f"  （已显示 {end}/{total}）回车=下一页，q=返回，数字=跳到第 N 条："))
+        if cmd.lower() in ("q", "quit", "exit"):
+            return
+        if cmd.isdigit():
+            n = max(1, int(cmd))
+            page = min((n - 1) // limit, (total - 1) // limit)
+            continue
+        page += 1
 
 
-def cmd_collect():
-    keyword = input("  请输入关键词：").strip()
-    if not keyword:
-        return
-    platforms = input("  平台（默认 xhs；逗号分隔可多平台，如 xhs,bili）：").strip() or "xhs"
-    limit_s = input("  每平台条数（默认 20）：").strip()
-    limit = int(limit_s) if limit_s.isdigit() else 20
-    plist = [p.strip() for p in platforms.split(",") if p.strip()]
+def _run_collect(keyword: str, plist: tuple, src_list: tuple,
+                 limit: int = 20, save: bool = False):
+    """执行采集 + 清洗 + 展示，返回 posts（供分页展示）。
 
-    print(f"\n  正在调用 MediaCrawler 搜索「{keyword}」（平台 {plist}，每平台 {limit} 条）…")
-    print("  ⚠ 首次使用会弹出 Chrome 窗口，请扫码登录；后续自动复用登录态。\n")
-    posts, errors, summary = orchestrator.collect(keyword, platforms=tuple(plist), limit=limit)
+    浏览器模式（save=False）：搜索结果清洗后直接呈现，不入库、用完即弃；
+    入库模式（save=True）：清洗后写入 collect.db。
+    """
+    posts, errors, summary = orchestrator.collect(
+        keyword, platforms=plist, limit=limit,
+        source_names=src_list, save=save)
     if errors:
         print("  部分源不可用（已自动跳过，不影响其他源）：")
         for e in errors:
             print(f"    ✗ {e}")
     print(f"\n  采集完成：命中 {len(posts)} 条")
     if summary:
-        print(f"  入库：新增 {summary['inserted']} 条，跳过重复 {summary['skipped']} 条")
-    _print_table([p.__dict__ for p in posts])
+        print(f"  清洗：删空文本 {summary['empty_removed']} 条，"
+              f"去重 {summary['dup_removed']} 条")
+    if save:
+        print(f"  已入库：新增 {summary['inserted']} 条，"
+              f"跳过重复 {summary['skipped']} 条")
+    else:
+        print("  浏览器模式：本次结果未入库，关闭即失效")
+    return posts
+
+
+def cmd_collect():
+    keyword = _clean(input("  请输入关键词："))
+    if not keyword:
+        return
+    platforms = input(
+        "  平台（默认 xhs,bili,douban,wb；逗号分隔多平台。\n"
+        "    MediaCrawler 码：xhs/bili/wb/zhihu/dy/ks/tieba（需扫码登录）\n"
+        "    游客态免登录：bilibili / douban / weibo）："
+    ).strip() or "xhs,bili,douban,wb"
+    src_line = input(
+        "  源（默认游客态 bilibili_api,douban_api,weibo_api；逗号分隔多源，\n"
+        "    如 mediacrawler,bilibili_api,douban_api,weibo_api）："
+    ).strip() or "bilibili_api,douban_api,weibo_api"
+    limit_s = input("  每平台条数（默认 20，B站支持翻页到更多）：").strip()
+    limit = int(limit_s) if limit_s.isdigit() else 20
+    save_s = input("  入库？(y=写入本地库 / 回车=浏览器模式不存)：").strip().lower()
+    save = save_s in ("y", "yes", "是")
+    plist = [p.strip() for p in platforms.split(",") if p.strip()]
+    src_list = [s.strip() for s in src_line.split(",") if s.strip()]
+
+    print(f"\n  正在用源 {src_list} 搜索「{keyword}」（平台 {plist}，每平台 {limit} 条）…")
+    print("  ⚠ mediacrawler 平台首次使用会弹出 Chrome 窗口扫码登录；B站/豆瓣游客态无需登录。\n")
+    posts = _run_collect(keyword, tuple(plist), tuple(src_list), limit, save)
+    _print_table([p.__dict__ for p in posts], pageable=True)
 
 
 def cmd_browse():
@@ -1463,7 +1597,7 @@ def cmd_browse():
     limit_s = input("  显示条数（默认 30）：").strip()
     limit = int(limit_s) if limit_s.isdigit() else 30
     rows = store.query_posts(keyword=kw, platform=pl, limit=200)
-    _print_table(rows, limit=limit)
+    _print_table(rows, limit=limit, pageable=True)
 
 
 def cmd_stats():
@@ -1509,7 +1643,7 @@ def main():
     print(BANNER)
     while True:
         print(MENU)
-        choice = input("  > ").strip()
+        choice = _clean(input("  > "))
         if choice == "1":
             cmd_collect()
         elif choice == "2":
@@ -1522,20 +1656,16 @@ def main():
             print("  再见 👋")
             break
         elif choice == "?":
-            print("  直接输入关键词 = 执行采集 [1]；菜单项如上。")
+            print("  直接输入关键词 = 浏览器模式采集（清洗后展示、不入库）；\n"
+                  "  菜单项如上，[1] 采集可询问是否入库。")
         elif choice:
-            # 直接输入关键词 → 等价于采集
-            keyword = choice
-            platforms = "xhs"
-            print(f"\n  正在调用 MediaCrawler 搜索「{keyword}」（默认平台 {platforms}）…")
-            posts, errors, summary = orchestrator.collect(keyword, platforms=(platforms,))
-            if errors:
-                for e in errors:
-                    print(f"    ✗ {e}")
-            print(f"  命中 {len(posts)} 条；入库新增 "
-                  f"{summary['inserted'] if summary else 0} 条，"
-                  f"重复 {summary['skipped'] if summary else 0} 条")
-            _print_table([p.__dict__ for p in posts])
+            # 直接输入关键词 → 浏览器模式：B站+豆瓣+微博游客态，清洗后展示，不入库。
+            keyword = _clean(choice)
+            plist = ("bili", "douban", "wb")
+            print(f"\n  正在调用 B站+豆瓣+微博 搜索「{keyword}」（游客态，免登录，浏览器模式）…")
+            posts = _run_collect(keyword, plist,
+                                 ("bilibili_api", "douban_api", "weibo_api"))
+            _print_table([p.__dict__ for p in posts], pageable=True)
         print()
 
 
@@ -1543,7 +1673,7 @@ if __name__ == "__main__":
     main()
 ```
 
-### 10. `collect/sources/__init__.py`（17 行）
+### 10. `collect/sources/__init__.py`（23 行）
 
 ```python
 """数据源适配器注册表。新增源时：
@@ -1552,11 +1682,17 @@ if __name__ == "__main__":
 """
 
 from collect.sources.base_source import BaseSource, SourceUnavailable
+from collect.sources.bilibili_source import BilibiliApiSource
+from collect.sources.douban_source import DoubanApiSource
 from collect.sources.mediacrawler_source import MediaCrawlerSource
+from collect.sources.weibo_source import WeiboApiSource
 
 # 已登记的适配器（name -> 工厂）。以后加 zhihu_mcp / weibo_mcp 等就在这里追加。
 AVAILABLE_SOURCES: dict[str, type[BaseSource]] = {
     MediaCrawlerSource.name: MediaCrawlerSource,
+    BilibiliApiSource.name: BilibiliApiSource,
+    DoubanApiSource.name: DoubanApiSource,
+    WeiboApiSource.name: WeiboApiSource,
 }
 
 
@@ -1611,7 +1747,7 @@ class BaseSource(ABC):
         return True
 ```
 
-### 12. `collect/sources/mediacrawler_source.py`（141 行）
+### 12. `collect/sources/mediacrawler_source.py`（162 行）
 
 ```python
 """MediaCrawler 适配器。
@@ -1631,6 +1767,8 @@ xhs / dy / ks / bili / wb / tieba / zhihu 七个平台的关键词搜索。
 
 import json
 import subprocess
+from collections import Counter
+from dataclasses import asdict
 from pathlib import Path
 
 from collect.post import Post, normalize_platform
@@ -1666,12 +1804,29 @@ class MediaCrawlerSource(BaseSource):
         code = self._resolve_code(platform)
         if code is None:
             return []  # 不支持的平台，静默返回空
+        if type(limit) is not int or limit <= 0:
+            raise ValueError("limit 必须为正整数")
+        # 比较运行前后的记录多重集合，追加同内容也算本次观察。
+        before = Counter(self._fingerprint(p) for p in self.load_results(keyword, code))
         result = self._run(keyword, code, limit)
         if result.returncode != 0:
             tail = (result.stdout or "")[-500:] + (result.stderr or "")[-500:]
             raise SourceUnavailable(
                 f"MediaCrawler 退出码 {result.returncode}，尾部输出：{tail.strip()}")
-        return self.load_results(keyword=keyword, platform_code=code)
+        fresh = []
+        for post in self.load_results(keyword=keyword, platform_code=code):
+            key = self._fingerprint(post)
+            if before[key]:
+                before[key] -= 1
+            else:
+                fresh.append(post)
+        return fresh[:limit]
+
+    @staticmethod
+    def _fingerprint(post):
+        """稳定序列化用于排除运行前已有记录；相同文件重写保守视作旧记录。"""
+        return json.dumps(asdict(post), ensure_ascii=False, sort_keys=True)
+
 
     def health_check(self) -> bool:
         return (self.mc_dir / "main.py").exists() and Path(self.mc_python).exists()
@@ -1721,6 +1876,8 @@ class MediaCrawlerSource(BaseSource):
                     rec = json.loads(line)
                 except json.JSONDecodeError:
                     continue
+                if not isinstance(rec, dict):
+                    continue
                 if keyword is not None:
                     rec_kw = str(rec.get("source_keyword") or "").strip()
                     if rec_kw != keyword:
@@ -1759,15 +1916,824 @@ class MediaCrawlerSource(BaseSource):
 
 ---
 
+### 13. `collect/sources/http_client.py`（89 行）
+
+```python
+"""轻量 HTTP 会话工具（纯标准库实现，无需第三方依赖）。
+
+为「游客态公开接口」类适配器（B站 / 豆瓣等）提供统一请求能力：
+1. 自动保存并携带 Cookie（模拟浏览器会话，如 B站 buvid3）；
+2. 自动附加 User-Agent / Referer（部分接口要求 Referer 才放行）；
+3. 自动解压 gzip 响应（B站接口返回 gzip）。
+
+只用于访问各平台公开、免登录的数据接口；不绕过任何登录或验证码。
+"""
+
+import gzip
+import http.cookiejar
+import json
+import urllib.parse
+import urllib.request
+
+# 默认浏览器 UA：部分接口要求真实浏览器标识，否则 403。
+DEFAULT_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+              "(KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36")
+
+
+class HttpSession:
+    """带 Cookie 存储的 HTTP 会话。
+
+    用法：
+        session = HttpSession()
+        session.get("https://www.bilibili.com/")          # 先访问主页拿 cookie
+        data = session.get_json("https://api.bilibili.com/...",
+                                params={...}, referer="https://www.bilibili.com/")
+    """
+
+    def __init__(self, ua: str = DEFAULT_UA, timeout: int = 20):
+        """参数：
+            ua       User-Agent 字符串
+            timeout  单次请求超时秒数
+        """
+        # CookieJar：请求响应里 Set-Cookie 的 cookie 会自动保存并在后续请求携带。
+        self._jar = http.cookiejar.CookieJar()
+        self._ua = ua
+        self._timeout = timeout
+        self._opener = urllib.request.build_opener(
+            urllib.request.HTTPCookieProcessor(self._jar))
+
+    def get_cookie(self, name: str) -> str | None:
+        """读取当前会话里的某个 Cookie 值，没有返回 None（供访客激活校验用）。"""
+        for c in self._jar:
+            if c.name == name:
+                return c.value
+        return None
+
+    def get(self, url: str, params: dict | None = None,
+            referer: str | None = None, accept: str = "*/*") -> tuple[int, str]:
+        """GET 请求，返回 (HTTP 状态码, 响应文本)。
+
+        参数：
+            url      目标地址（可含查询串）
+            params   追加的查询参数（会自动 urlencode）
+            referer  模拟从哪个页面跳转过来（部分接口强制校验）
+            accept   Accept 头
+        """
+        if params:
+            url = f"{url}?{urllib.parse.urlencode(params)}"
+        headers = {
+            "User-Agent": self._ua,
+            "Accept": accept,
+            "Accept-Language": "zh-CN,zh;q=0.9",
+        }
+        if referer:
+            headers["Referer"] = referer
+        req = urllib.request.Request(url, headers=headers)
+        with self._opener.open(req, timeout=self._timeout) as resp:
+            body = resp.read()
+            # gzip 响应解压后才是可读文本。
+            if resp.headers.get("Content-Encoding") == "gzip":
+                body = gzip.decompress(body)
+            return resp.status, body.decode("utf-8", errors="replace")
+
+    def get_json(self, url: str, params: dict | None = None,
+                 referer: str | None = None) -> dict:
+        """GET 并把响应解析为 JSON 对象，失败抛 RuntimeError。"""
+        status, text = self.get(
+            url, params, referer,
+            accept="application/json, text/plain, */*")
+        if status != 200:
+            raise RuntimeError(f"HTTP {status}: {url}")
+        data = json.loads(text)
+        if not isinstance(data, dict):
+            raise RuntimeError(f"响应不是 JSON 对象: {url}")
+        return data
+```
+
+---
+
+### 14. `collect/sources/bilibili_source.py`（103 行）
+
+```python
+"""B站游客态搜索适配器。
+
+直接调用 B站公开搜索接口（免登录、游客态）：
+    https://api.bilibili.com/x/web-interface/search/type?search_type=video&keyword=xxx
+
+流程：先访问 www.bilibili.com 主页拿 buvid3 等 Cookie（游客身份标识），
+再带 Referer 请求搜索接口，返回的视频列表规范化为统一 Post。
+
+无需安装任何额外依赖（纯标准库 HTTP），无登录、无验证码，
+属于对公开数据的合规访问。被风控或接口变动时抛 SourceUnavailable，
+由调度器跳过该源，不影响其他源。
+"""
+
+import re
+from datetime import datetime
+
+from collect.post import Post, normalize_platform
+from collect.sources.base_source import BaseSource, SourceUnavailable
+from collect.sources.http_client import HttpSession
+
+# 主页：先访问拿 Cookie；搜索接口：视频搜索。
+_HOME_URL = "https://www.bilibili.com/"
+_SEARCH_API = "https://api.bilibili.com/x/web-interface/search/type"
+# 搜索结果标题里会带 <em class="keyword">高亮标签</em>，需要剥掉。
+_TAG_RE = re.compile(r"<[^>]+>")
+# 翻页上限：每页约 20 条，最多 8 页 ≈ 160 条（防风控与接口滥用）。
+_MAX_PAGES = 8
+
+
+class BilibiliApiSource(BaseSource):
+    name = "bilibili_api"
+    platforms = ["bilibili"]
+
+    def __init__(self, **kwargs):
+        # 每个实例独立 Cookie 会话（模拟一次浏览器访问）。
+        self._session = HttpSession()
+
+    def search(self, keyword: str, platform: str | None = None,
+               limit: int = 20) -> list[Post]:
+        """搜索关键词，返回 B站视频帖子列表（必要时翻页凑够 limit）。
+
+        B站搜索接口每页固定约 20 条，limit 超过一页时自动翻页，
+        直到凑满 limit 或翻完可用页为止（上限 8 页，防风控）。
+        """
+        # 只服务 B站平台；调度器传了别的平台码时静默返回空。
+        if normalize_platform(platform or "bilibili") != "bilibili":
+            return []
+        target = max(int(limit), 1)
+        try:
+            # 第一步：访问主页拿游客 Cookie，否则搜索接口返回 -412 风控。
+            self._session.get(_HOME_URL)
+            posts: list[Post] = []
+            page = 1
+            while len(posts) < target and page <= _MAX_PAGES:
+                data = self._session.get_json(
+                    _SEARCH_API,
+                    params={"search_type": "video", "keyword": keyword,
+                            "page": page},
+                    referer=_HOME_URL,
+                )
+                if data.get("code") != 0:
+                    raise SourceUnavailable(
+                        f"B站接口返回 code={data.get('code')} "
+                        f"msg={data.get('message')}")
+                results = (data.get("data") or {}).get("result") or []
+                for r in results:
+                    if isinstance(r, dict):
+                        posts.append(self._to_post(r, keyword))
+                if not results:
+                    break  # 没更多结果了
+                page += 1
+        except Exception as exc:
+            raise SourceUnavailable(f"B站接口请求失败：{exc}") from exc
+        return posts[:target]
+
+    # ---------------------------------------------------------------- 内部实现
+    def _to_post(self, r: dict, keyword: str) -> Post:
+        """把 B站搜索结果的一条记录转成统一 Post。"""
+        # 去掉 <em> 高亮标签，标题/简介才是干净文本。
+        title = _TAG_RE.sub("", r.get("title") or "").strip()
+        desc = _TAG_RE.sub("", r.get("description") or "").strip()
+        url = r.get("arcurl") or ""
+        # pubdate 是 Unix 秒级时间戳，转成统一时间格式。
+        pubdate = r.get("pubdate")
+        published = ""
+        if pubdate:
+            published = datetime.fromtimestamp(int(pubdate)).strftime(
+                "%Y-%m-%d %H:%M:%S")
+        return Post(
+            platform="bilibili",
+            title=title,
+            text=desc or title,
+            url=url,
+            author=r.get("author") or "",
+            published_at=published,
+            source_adapter=self.name,
+            keyword=keyword,
+            extra={
+                "bvid": r.get("bvid"),
+                "play": r.get("play"),              # 播放量
+                "video_review": r.get("video_review"),  # 弹幕数
+                "favorites": r.get("favorites"),    # 收藏数
+            },
+        )
+```
+
+---
+
+### 15. `collect/sources/douban_source.py`（139 行）
+
+```python
+"""豆瓣游客态搜索适配器。
+
+豆瓣官方 API 已停止对个人开放，本适配器改用豆瓣移动端公开搜索接口
+（游客态、免登录）：
+    https://m.douban.com/rexxar/api/v2/search/movie?q=关键词&count=20&start=0
+
+返回的是书影音条目（电影 / 电视剧 / 图书等）。条目级字段里：
+    target.year        首播 / 上映 / 出版年份 → 转成 published_at
+    card_subtitle      「地区 / 类型... / 导演 / 主演...」→ 导演取为 author
+
+接口用 start 偏移分页（每页 20 条）。豆瓣对短时高频请求会返回
+need_login(403)，故翻页上限较低、页间延迟，触发时降级保留已拿数据。
+
+被风控或接口变动时抛 SourceUnavailable，由调度器跳过该源。
+"""
+
+import re
+import time
+
+from collect.post import Post
+from collect.sources.base_source import BaseSource, SourceUnavailable
+from collect.sources.http_client import HttpSession
+
+# 移动端首页（作为 Referer）+ 移动端公开搜索接口。
+_REFERER = "https://m.douban.com/"
+_SEARCH_API = "https://m.douban.com/rexxar/api/v2/search/movie"
+# 翻页上限：每页 20 条，最多 3 页 ≈ 60 条。豆瓣对高频请求返回 need_login(403)，
+# 上限设小 + 页间延迟，控制单次采集请求量（触发 403 时会降级保留已拿数据）。
+_MAX_PAGES = 3
+
+# card_subtitle 中常见的类型词（用于把「类型段」与「人名段」区分开）。
+_GENRE_WORDS = {
+    "剧情", "喜剧", "动作", "爱情", "科幻", "动画", "儿童", "奇幻",
+    "冒险", "悬疑", "惊悚", "犯罪", "灾难", "纪录片", "真人秀", "脱口秀",
+    "综艺", "音乐", "歌舞", "戏曲", "古装", "历史", "战争", "传记",
+    "运动", "短片", "同性", "情色", "家庭", "西部", "恐怖", "武侠",
+    "神话", "侦探", "谍战", "医疗", "校园", "偶像", "犯罪", "励志",
+}
+
+
+def _parse_year(raw) -> str:
+    """从年份字符串（如 '2022' / '2026'）提取 4 位年份，规范为日期时间。"""
+    m = re.search(r"(\d{4})", str(raw or ""))
+    return f"{m.group(1)}-01-01 00:00:00" if m else ""
+
+
+def _parse_subtitle(subtitle: str) -> tuple[str, list[str]]:
+    """解析 card_subtitle → (导演, 主演列表)。
+
+    典型格式：「地区 / 类型... / 导演 / 主演...」；类型段可能缺失。
+    地区段固定跳过；「全部由类型词组成」的段视为类型段跳过，
+    其余段视为人名段，第一段即导演。
+    """
+    parts = [p.strip() for p in subtitle.split("/") if p.strip()]
+    if not parts:
+        return "", []
+    names: list[str] = []
+    for part in parts[1:]:  # 跳过地区段
+        tokens = [t for t in re.split(r"\s+", part) if t]
+        if tokens and all(t in _GENRE_WORDS for t in tokens):
+            continue  # 类型段
+        names.append(part)
+    if not names:
+        return "", []
+    return names[0], names[1:]
+
+
+class DoubanApiSource(BaseSource):
+    name = "douban_api"
+    platforms = ["douban"]
+
+    def __init__(self, **kwargs):
+        self._session = HttpSession()
+
+    def search(self, keyword: str, platform: str | None = None,
+               limit: int = 20) -> list[Post]:
+        """搜索关键词，返回豆瓣书影音条目列表（必要时翻页凑够 limit）。
+
+        豆瓣 rexxar 搜索接口用 start 偏移分页（start=20 是第 2 页）。
+        limit 超过一页时递增 start 继续取，直到凑满 limit 或结果取完。
+        注意：豆瓣对短时高频请求会返回 need_login(403)，因此：
+          - 翻页上限较低（3 页 ≈ 60 条），页间小延迟；
+          - 翻页中一旦触发 403，保留已拿到页降级返回，不导致整次失败
+            （单页用户至少能拿到第一页结果）。
+        """
+        # 只服务豆瓣平台；调度器传了别的平台码时静默返回空。
+        if (platform or "douban") != "douban":
+            return []
+        target = max(int(limit), 1)
+        posts: list[Post] = []
+        start = 0
+        while len(posts) < target and start < _MAX_PAGES * 20:
+            try:
+                data = self._session.get_json(
+                    _SEARCH_API,
+                    params={"q": keyword, "count": 20, "start": start},
+                    referer=_REFERER,
+                )
+            except Exception as exc:
+                if posts:
+                    # 降级：已有一页以上结果，直接返回，避免整次采集失败。
+                    break
+                raise SourceUnavailable(f"豆瓣接口请求失败：{exc}") from exc
+            items = data.get("items") or []
+            for it in items:
+                if isinstance(it, dict):
+                    posts.append(self._to_post(it, keyword))
+            if len(items) < 20:
+                break  # 不满一页 = 没有更多结果了
+            start += 20
+            if len(posts) < target:
+                time.sleep(0.8)  # 页间延迟，降低连续请求触发 need_login 风险
+        return posts[:target]
+
+    # ---------------------------------------------------------------- 内部实现
+    def _to_post(self, it: dict, keyword: str) -> Post:
+        """把豆瓣搜索结果的一条记录转成统一 Post。"""
+        target = it.get("target") or {}
+        sid = str(target.get("id") or "")
+        # 条目 url 字段可能缺失，用 subject id 构造唯一链接，
+        # 保证调度器按 (platform, url) 去重时不会把多条压成一条。
+        url = target.get("url") or (
+            f"https://movie.douban.com/subject/{sid}/" if sid else "")
+        subtitle = target.get("card_subtitle") or ""
+        abstract = target.get("abstract") or ""
+        rating = target.get("rating") if isinstance(target.get("rating"), dict) else {}
+        director, actors = _parse_subtitle(subtitle)
+        return Post(
+            platform="douban",
+            title=target.get("title") or "",
+            text=subtitle or abstract,
+            url=url,
+            author=director,  # 书影音条目无发帖人，取导演作作者
+            published_at=_parse_year(target.get("year")),
+            source_adapter=self.name,
+            keyword=keyword,
+            extra={
+                "subject_id": sid,
+                "type": it.get("target_type") or target.get("type") or "",
+                "rating": rating.get("value"),
+                "rating_count": rating.get("count"),
+                "year": target.get("year"),
+                "director": director,
+                "actors": actors,
+            },
+        )
+```
+
+---
+
+### 16. `collect/sources/weibo_source.py`（153 行）
+
+```python
+"""微博游客态搜索适配器（访客激活流程，免登录）。
+
+微博网页/移动接口需要访客 Cookie（SUB/SUBP）。游客态激活流程
+（参考 astron-weibo-mcp / yt-dlp 的实现）：
+1. 访问 m.weibo.cn 主页（prime，种基础 Cookie）；
+2. 请求 visitor.passport.weibo.cn/visitor/genvisitor 获取 tid；
+3. 请求 visitor.passport.weibo.cn/visitor/visitor?a=incarnate&t=tid 换发 SUB/SUBP；
+4. 带访客 Cookie 请求 m.weibo.cn 搜索接口。
+
+无需登录、无验证码，属于对公开数据的合规访问。被风控或接口变动时
+抛 SourceUnavailable，由调度器跳过该源。
+"""
+
+import json
+import random
+import re
+import urllib.parse
+from email.utils import parsedate_to_datetime
+
+from collect.post import Post, normalize_platform
+from collect.sources.base_source import BaseSource, SourceUnavailable
+from collect.sources.http_client import HttpSession
+
+# 首页（prime / Referer）+ 访客激活 + 搜索接口。
+_HOME_URL = "https://m.weibo.cn/"
+_GEN_URL = "https://visitor.passport.weibo.cn/visitor/genvisitor"
+_ACTIVATE_URL = "https://visitor.passport.weibo.cn/visitor/visitor"
+_SEARCH_API = "https://m.weibo.cn/api/container/getIndex"
+# 微博正文/话题里带 <a> / <span> 等 HTML 标签，需要剥掉。
+_TAG_RE = re.compile(r"<[^>]+>")
+
+
+class WeiboApiSource(BaseSource):
+    name = "weibo_api"
+    platforms = ["weibo"]
+
+    def __init__(self, **kwargs):
+        # 每个实例独立 Cookie 会话；_visitor_ok 标记访客已激活（避免重复激活）。
+        self._session = HttpSession()
+        self._visitor_ok = False
+
+    def search(self, keyword: str, platform: str | None = None,
+               limit: int = 20) -> list[Post]:
+        """搜索关键词，返回微博帖子列表。"""
+        # 只服务微博平台（兼容 MediaCrawler 码 wb）。
+        if normalize_platform(platform or "weibo") != "weibo":
+            return []
+        if not self._activate_visitor():
+            raise SourceUnavailable("微博访客激活失败（风控或接口变动）")
+        cid = f"100103type=1&q={keyword}"
+        try:
+            data = self._session.get_json(
+                _SEARCH_API,
+                params={"containerid": cid, "page": 1},
+                referer=f"https://m.weibo.cn/search?containerid={urllib.parse.quote(cid)}",
+            )
+        except Exception as exc:
+            raise SourceUnavailable(f"微博搜索请求失败：{exc}") from exc
+        if data.get("ok") not in (1, True, "1"):
+            raise SourceUnavailable(f"微博接口 ok={data.get('ok')}，可能被风控")
+        cards = (data.get("data") or {}).get("cards") or []
+        # 微博卡片有两种形态：直接含 mblog 的普通卡片，以及 card_group 卡片组
+        # （组内混有用户/话题/微博卡片）。全部提取 mblog，并按 mid 去重。
+        seen: set[str] = set()
+        posts = []
+        for card in cards:
+            if not isinstance(card, dict):
+                continue
+            batch: list[dict] = []
+            if card.get("mblog"):
+                batch.append(card["mblog"])
+            for gc in card.get("card_group") or []:
+                if isinstance(gc, dict) and gc.get("mblog"):
+                    batch.append(gc["mblog"])
+            for mblog in batch:
+                mid = str(mblog.get("id") or "")
+                if mid and mid in seen:
+                    continue
+                if mid:
+                    seen.add(mid)
+                posts.append(self._to_post(mblog, keyword))
+        return posts[:max(int(limit), 1)]
+
+    # ---------------------------------------------------------------- 内部实现
+    def _activate_visitor(self) -> bool:
+        """生成并激活访客 Cookie，成功返回 True（重复调用幂等）。"""
+        if self._visitor_ok:
+            return True
+        try:
+            # 1. 访问主页，先种基础 Cookie。
+            self._session.get(_HOME_URL)
+            # 2. genvisitor 获取访客 tid。
+            cb = f"gen_cb_{random.randint(100000, 999999)}"
+            status, text = self._session.get(
+                _GEN_URL,
+                params={"cb": cb, "fp": "0", "tid": "", "from": "weibo",
+                        "_rand": str(random.random())},
+            )
+            if status != 200:
+                return False
+            m = re.search(r"\((\{.*\})\)", text)
+            if not m:
+                return False
+            data = json.loads(m.group(1)).get("data") or {}
+            tid = str(data.get("tid") or "").strip()
+            if not tid:
+                return False
+            # 3. incarnate 换发访客 Cookie；遍历 w 值直到拿到 SUB+SUBP。
+            for w in ("2", "3", "1", "0"):
+                self._session.get(
+                    _ACTIVATE_URL,
+                    params={"a": "incarnate", "t": tid, "w": w, "c": "095",
+                            "gc": "", "cb": "cross_domain", "from": "weibo",
+                            "_rand": str(random.random())},
+                    referer=_HOME_URL,
+                )
+                if self._session.get_cookie("SUB") and self._session.get_cookie("SUBP"):
+                    self._visitor_ok = True
+                    return True
+        except Exception:
+            return False
+        return False
+
+    def _to_post(self, mblog: dict, keyword: str) -> Post:
+        """把微博搜索结果的一条 mblog 记录转成统一 Post。"""
+        # 微博没有独立标题，正文做 title 和 text。
+        text = _TAG_RE.sub("", mblog.get("text") or "").strip()
+        mid = str(mblog.get("id") or "")
+        url = f"https://m.weibo.cn/status/{mid}" if mid else ""
+        user = mblog.get("user") or {}
+        return Post(
+            platform="weibo",
+            title=text[:40],
+            text=text,
+            url=url,
+            author=user.get("screen_name") or "",
+            published_at=self._parse_time(mblog.get("created_at")),
+            source_adapter=self.name,
+            keyword=keyword,
+            extra={
+                "mid": mid,
+                "uid": user.get("id"),
+                "reposts_count": mblog.get("reposts_count"),
+                "comments_count": mblog.get("comments_count"),
+                "attitudes_count": mblog.get("attitudes_count"),
+            },
+        )
+
+    @staticmethod
+    def _parse_time(raw) -> str:
+        """把微博时间（Sun Aug 23 17:13:48 +0800 2026）转成统一格式。"""
+        if not raw:
+            return ""
+        try:
+            dt = parsedate_to_datetime(str(raw))
+            return dt.strftime("%Y-%m-%d %H:%M:%S")
+        except Exception:
+            return str(raw)
+```
+
+---
+
+### 17. `collect/cleaner.py`（59 行）
+
+```python
+"""采集数据的清洗模块（浏览器模式核心）。
+
+对齐旧 clean_posts.py 的清洗规则，但作用于统一 Post 列表（内存级），
+不碰文件、不依赖 pandas，纯标准库。典型流程：
+    采集原始 posts → clean_posts() → 呈现给用户 / 决定是否入库
+
+规则：
+    1. 删除空文本（strip 后为空）；豆瓣等源可能产生空 text，一并剔除；
+    2. 按 (platform, url) 去重，保留首次出现（与调度器去重互补，
+       这里的 url 已统一构造过，进一步保证唯一）；
+    3. 按 published_at 升序排序（空时间排最后），便于展示时间线。
+
+返回 (cleaned, stats)：cleaned 为清洗后的 Post 列表；
+stats 含 total / empty_removed / dup_removed / final。
+"""
+
+from collect.post import Post
+
+
+def clean_posts(posts: list[Post]) -> tuple[list[Post], dict]:
+    """清洗采集到的帖子列表（内存操作，不落盘）。
+
+    参数：
+        posts : 采集器返回的 Post 列表（可能含空文本 / 跨页重复）
+    返回：
+        (cleaned, stats)
+        cleaned : 清洗后的 Post 列表
+        stats   : {"total", "empty_removed", "dup_removed", "final"}
+    """
+    total = len(posts)
+
+    # ---- 第 1 步：删除空文本 ----
+    kept = [p for p in posts if (p.text or "").strip()]
+    empty_removed = total - len(kept)
+
+    # ---- 第 2 步：按 (platform, url) 去重，保留首次出现 ----
+    seen: set[tuple[str, str]] = set()
+    uniq: list[Post] = []
+    for p in kept:
+        key = (p.platform, p.url)
+        if key not in seen:
+            seen.add(key)
+            uniq.append(p)
+    dup_removed = len(kept) - len(uniq)
+
+    # ---- 第 3 步：按发布时间升序排序（空时间排最后） ----
+    def _sort_key(p: Post):
+        t = (p.published_at or "").strip()
+        return (t == "", t)
+
+    cleaned = sorted(uniq, key=_sort_key)
+
+    stats = {
+        "total": total,
+        "empty_removed": empty_removed,
+        "dup_removed": dup_removed,
+        "final": len(cleaned),
+    }
+    return cleaned, stats
+```
+
+---
+
+### 18. `collect/backfill_douban.py`（11 行）
+
+```python
+"""旧豆瓣修复入口：改为只读核对，禁止把导演和上映年填成发帖信息。"""
+from collect import store
+
+def backfill():
+    """读取兼容视图；原始字段保留在 extra 中，不发请求、不修改数据库。"""
+    rows = store.query_posts(platform="douban", limit=None)
+    count = sum(r["record_type"] == "catalog_item" for r in rows)
+    print(f"已识别 {count} 条影视条目。读取时隔离旧作者/日期；原始数据库未改动。")
+
+if __name__ == "__main__":
+    backfill()
+```
+
+---
+
+### 19. `collect/time_utils.py`（27 行）
+
+```python
+"""统一时间：秒/毫秒时间戳和带时区日期转为北京时间；未知时间留空。"""
+import re
+from datetime import datetime, timezone, timedelta
+from email.utils import parsedate_to_datetime
+
+BEIJING = timezone(timedelta(hours=8))
+
+def normalize_time(raw):
+    """返回固定格式的北京时间，不把年份或不完整日期补造成具体日期。"""
+    value = str(raw or "").strip()
+    if not value:
+        return ""
+    try:
+        if re.fullmatch(r"[+-]?\d{10}(?:\.\d+)?|[+-]?\d{13}", value):
+            stamp = float(value)
+            if len(value.lstrip("+-")) == 13:
+                stamp /= 1000
+            dt = datetime.fromtimestamp(stamp, timezone.utc)
+        elif re.match(r"^\d{4}-\d{2}-\d{2}(?:$|[ T])", value):
+            dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        else:
+            dt = parsedate_to_datetime(value)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=BEIJING)
+        return dt.astimezone(BEIJING).strftime("%Y-%m-%d %H:%M:%S")
+    except (ValueError, TypeError, OverflowError, OSError):
+        return ""
+```
+
+---
+
+### 20. `collect/web_app.py`（146 行）
+
+```python
+"""本地研究工作台：python -m collect.web_app；默认仅监听 127.0.0.1。
+
+能力：
+1. 实时搜索（GET/POST 白名单）：POST /api/search 调用 B站+豆瓣+微博游客态
+   适配器真实搜索，结果仅缓存在内存，不写库；
+2. 手动入库：POST /api/import 把最近一次搜索结果写入本地库（确认才存）；
+3. 本地库浏览：GET /api/posts 只读导出；静态页面白名单。
+
+搜索结果是临时数据，本次关闭即失效；入库必须由前端「手动入库」触发。
+"""
+import argparse
+import json
+from dataclasses import asdict
+from datetime import datetime
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from urllib.parse import urlsplit
+
+from collect import orchestrator, store
+
+WEB = Path(__file__).resolve().parent.parent / "web"
+
+# 实时搜索默认使用游客态免登录源（B站 + 豆瓣 + 微博），不触发 MediaCrawler。
+_DEFAULT_PLATFORMS = ("bili", "douban", "wb")
+_DEFAULT_SOURCES = ("bilibili_api", "douban_api", "weibo_api")
+
+
+def post_to_row(p) -> dict:
+    """把采集返回的 Post 转成与 store.export_rows 同形状的行，前端可直接复用。"""
+    row = asdict(p)
+    row["keywords"] = [p.keyword] if p.keyword else []
+    row["observations"] = []           # 搜索结果尚无快照
+    row["fetched_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    return row
+
+
+class Handler(BaseHTTPRequestHandler):
+    """只提供白名单静态文件、只读 API 与受控的搜索/入库接口。"""
+    def _send_json(self, obj, status=200):
+        """统一 JSON 响应。"""
+        content = json.dumps(obj, ensure_ascii=False).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(content)))
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.end_headers()
+        self.wfile.write(content)
+
+    def do_GET(self):
+        """响应页面或本地库快照，缺失数据库显示空状态。"""
+        path = urlsplit(self.path).path
+        if path == "/api/posts":
+            try:
+                self._send_json({"rows": store.export_rows(self.server.db_path)})
+            except Exception:
+                self.send_error(500, "Cannot read local database")
+            return
+        elif path in ("/", "/index.html", "/app.js", "/style.css"):
+            name = "index.html" if path == "/" else path[1:]
+            try:
+                content = (WEB / name).read_bytes()
+            except OSError:
+                self.send_error(404)
+                return
+            mime = {".html": "text/html", ".js": "text/javascript",
+                    ".css": "text/css"}[Path(name).suffix] + "; charset=utf-8"
+            self.send_response(200)
+            self.send_header("Content-Type", mime)
+            self.send_header("Content-Length", str(len(content)))
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Content-Security-Policy",
+                             "default-src 'self'; style-src 'self' 'unsafe-inline'; "
+                             "script-src 'self'; connect-src 'self'; "
+                             "frame-ancestors 'none'; base-uri 'none'")
+            self.end_headers()
+            self.wfile.write(content)
+        else:
+            self.send_error(404)
+
+    def do_POST(self):
+        """实时搜索 / 手动入库：搜索只缓存不写库，入库需显式调用。"""
+        path = urlsplit(self.path).path
+        length = int(self.headers.get("Content-Length") or 0)
+        raw = self.rfile.read(length) if length else b"{}"
+        try:
+            payload = json.loads(raw) if raw else {}
+        except json.JSONDecodeError:
+            payload = {}
+        if path == "/api/search":
+            keyword = str(payload.get("keyword") or "").strip()
+            if not keyword:
+                self._send_json({"rows": [], "errors": ["关键词不能为空"],
+                                 "summary": None})
+                return
+            try:
+                limit = max(1, int(payload.get("limit") or 20))
+            except (TypeError, ValueError):
+                limit = 20
+            try:
+                posts, errors, summary = orchestrator.collect(
+                    keyword, platforms=_DEFAULT_PLATFORMS,
+                    limit=limit, source_names=_DEFAULT_SOURCES, save=False)
+            except ValueError as exc:
+                self._send_json({"rows": [], "errors": [str(exc)], "summary": None})
+                return
+            self.server.last_results = {"keyword": keyword, "posts": posts}
+            self._send_json({"rows": [post_to_row(p) for p in posts],
+                             "errors": errors, "summary": summary})
+        elif path == "/api/import":
+            last = getattr(self.server, "last_results", None) or {}
+            posts = last.get("posts") or []
+            if not posts:
+                self._send_json({"inserted": 0, "skipped": 0,
+                                 "message": "没有可入库的结果：请先实时搜索一次。"})
+                return
+            saved = store.save_posts(posts)
+            self.server.last_results = None  # 入库后清空缓存，避免重复入库
+            self._send_json({**saved,
+                             "message": f"已入库 {saved['inserted']} 条，"
+                                        f"跳过重复 {saved['skipped']} 条"})
+        else:
+            self.send_error(404)
+
+
+def main():
+    """解析端口和数据库路径，启动只读本地服务。"""
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--port", type=int, default=8765)
+    parser.add_argument("--db", type=Path, default=store.DEFAULT_DB)
+    args = parser.parse_args()
+    server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
+    server.db_path = args.db
+    server.last_results = None            # 最近一次搜索结果缓存（不落盘）
+    print(f"CyberField: http://127.0.0.1:{args.port}", flush=True)
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.server_close()
+
+
+if __name__ == "__main__":
+    main()
+```
+
+---
+
 ## 四、运行方式速查
 
 ```powershell
-# 测试（20 项）
-python test_clean_posts.py   # 7 项
-python test_posts_db.py      # 13 项
+# 测试（33 项）
+python test_clean_posts.py         # 7 项
+python test_posts_db.py            # 13 项
+python -m unittest test_collect_data test_collect_regressions   # 13 项
 
-# Demo 终端试用（主项目根目录）
+# Web 本地工作台（实时搜索 + 手动入库 + 浏览）
+.\.venv\Scripts\python.exe -B -m collect.web_app        # 打开 http://127.0.0.1:8765
+
+# Demo 终端试用（主项目根目录；直接输入关键词 = 浏览器模式，清洗后展示、不入库）
 python -m collect.demo_cli
+
+# 浏览器模式采集（搜完不入库，用完即弃）
+python -c "from collect import orchestrator; posts,err,summ = orchestrator.collect('奶龙', platforms=('bili','douban','wb'), save=False); print(len(posts), summ)"
+
+# 入库模式采集（清洗后写入 collect.db）
+python -c "from collect import orchestrator; posts,err,summ = orchestrator.collect('奶龙', platforms=('bili','douban','wb'), save=True); print(len(posts), summ)"
+
+# 豆瓣只读核对（不再回填，仅确认影视条目语义隔离）
+python -m collect.backfill_douban
 
 # MediaCrawler 真实搜索（workdir 必须是 MediaCrawler 目录）
 D:\Projects\MediaCrawler\.venv\Scripts\python.exe -B main.py `
