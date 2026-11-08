@@ -21,6 +21,7 @@ from pathlib import Path
 
 from collect.post import Post, normalize_platform
 from collect.sources.base_source import BaseSource, SourceUnavailable
+from collect.time_utils import normalize_time
 
 # 本适配器直接透传 MediaCrawler 的平台码（xhs / bili / wb / zhihu / dy / ks / tieba）。
 _MC_PLATFORM_CODES = {
@@ -143,13 +144,14 @@ class MediaCrawlerSource(BaseSource):
         title = rec.get("title") or rec.get("desc") or ""
         text = rec.get("desc") or ""
         url = rec.get("note_url") or rec.get("url") or ""
+        tags = rec.get("tag_list") or ""
         return Post(
             platform=normalize_platform(code),
             title=title,
             text=text,
             url=url,
             author=rec.get("nickname") or rec.get("author") or "",
-            published_at=str(rec.get("time") or ""),
+            published_at=normalize_time(rec.get("time")),
             source_adapter=self.name,
             keyword=str(rec.get("source_keyword") or keyword or ""),
             extra={
@@ -158,5 +160,7 @@ class MediaCrawlerSource(BaseSource):
                 "comment": rec.get("comment_count"),
                 "share": rec.get("share_count"),
                 "note_id": rec.get("note_id"),
+                "tags": tags.split(",") if tags else [],
+                "type": rec.get("type"),
             },
         )
