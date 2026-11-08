@@ -25,8 +25,11 @@ from collect.sources.http_client import HttpSession
 # 主页：先访问拿 Cookie；搜索接口：按内容类型搜索。
 _HOME_URL = "https://www.bilibili.com/"
 _SEARCH_API = "https://api.bilibili.com/x/web-interface/search/type"
+_VIEW_API = "https://api.bilibili.com/x/web-interface/view"  # 详情：完整简介/分P/时长
 # 搜索结果标题里会带 <em class="keyword">高亮标签</em>，需要剥掉。
 _TAG_RE = re.compile(r"<[^>]+>")
+# 简介里的时序章节（「00:00 开场」「12:30 总结」）可当作内容概览提取。
+_OUTLINE_RE = re.compile(r"^\s*\d{1,2}:\d{2}(?::\d{2})?\s+")
 # 深翻页：每页约 20 条，上限 50 页 ≈ 1000 条/类型（实测深翻稳定，
 # 用页间延迟控风控；触发 -412 时早页重试一次、晚页降级保留已拿数据）。
 _MAX_PAGES = 50
@@ -40,9 +43,12 @@ class BilibiliApiSource(BaseSource):
     name = "bilibili_api"
     platforms = ["bilibili"]
 
-    def __init__(self, **kwargs):
+    def __init__(self, detail_limit: int = 0, **kwargs):
         # 每个实例独立 Cookie 会话（模拟一次浏览器访问）。
         self._session = HttpSession()
+        # detail_limit > 0 时对前 N 条视频抓详情接口，补完整简介/时序章节概览；
+        # 0 = 不抓（保持深翻页批量速度）。逐条详情较慢，批量建议 20~50。
+        self.detail_limit = max(int(detail_limit or 0), 0)
 
     def search(self, keyword: str, platform: str | None = None,
                limit: int = 20) -> list[Post]:
@@ -65,6 +71,8 @@ class BilibiliApiSource(BaseSource):
                 posts.extend(got)
                 if len(posts) >= target:
                     break
+            if self.detail_limit:
+                posts = self._enrich_details(posts[:self.detail_limit])
         except Exception as exc:
             raise SourceUnavailable(f"B站接口请求失败：{exc}") from exc
         return posts[:target]
@@ -112,6 +120,44 @@ class BilibiliApiSource(BaseSource):
             if len(posts) < limit and page <= _MAX_PAGES:
                 time.sleep(_PAGE_DELAY)
         return posts
+
+    def _enrich_details(self, posts: list[Post]) -> list[Post]:
+        """对视频抓详情接口：补完整简介(desc_full)、简介里的时序章节(outline)、
+        时长/分区/完整互动数。单条失败跳过，不影响整体。"""
+        enriched: list[Post] = []
+        for p in posts:
+            bvid = (p.extra or {}).get("bvid")
+            if not bvid:
+                enriched.append(p)
+                continue
+            try:
+                view = self._session.get_json(
+                    _VIEW_API, params={"bvid": bvid}, referer=_HOME_URL)
+                d = view.get("data") or {}
+                extra = dict(p.extra or {})
+                desc_full = (d.get("desc") or "").strip()
+                if desc_full:
+                    extra["desc_full"] = desc_full
+                    outline = [ln.strip() for ln in desc_full.splitlines()
+                               if _OUTLINE_RE.match(ln.strip())]
+                    if outline:
+                        extra["outline"] = outline[:12]
+                if d.get("duration"):
+                    extra["duration"] = d.get("duration")
+                if d.get("tname"):
+                    extra["tname"] = d.get("tname")
+                # 用详情接口的完整互动数补上搜索页可能缺失的字段。
+                stat = d.get("stat") or {}
+                for api_key, extra_key in (("view", "play"), ("danmaku", "danmaku"),
+                                           ("favorite", "favorites"), ("like", "like"),
+                                           ("reply", "reply")):
+                    if stat.get(api_key) is not None and not extra.get(extra_key):
+                        extra[extra_key] = stat[api_key]
+                p.extra = extra
+            except Exception:
+                pass  # 单条详情失败不影响整体
+            enriched.append(p)
+        return enriched
 
     def _to_post(self, r: dict, keyword: str, search_type: str) -> Post:
         """把一条搜索结果转成统一 Post（video 与 article 字段不同）。"""
