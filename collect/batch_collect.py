@@ -17,6 +17,11 @@
     --sources         适配器名，逗号分隔（默认游客态三源）
     --limit           每词每平台上限（B站深翻页单词可达 ~1000）
     --save            入库；不带则只采集不入库
+    --ocr             对小红书笔记图片做 OCR 识别观点文字（需 mediacrawler 源，慢）
+
+    OCR 示例（需关梯子）：
+    python -m collect.batch_collect --keywords "猫" --platforms xhs \
+        --sources mediacrawler --limit 100 --ocr --save
 """
 
 import argparse
@@ -50,6 +55,8 @@ def main():
                         help="每词每平台最多条数")
     parser.add_argument("--save", action="store_true",
                         help="入库；不带则只采集不入库（浏览器模式）")
+    parser.add_argument("--ocr", action="store_true",
+                        help="对小红书笔记图片做 OCR 识别观点文字（需 mediacrawler 源）")
     parser.add_argument("--delay", type=float, default=1.0,
                         help="关键词之间间隔秒数（默认 1s，防平台风控）")
     args = parser.parse_args()
@@ -75,7 +82,16 @@ def main():
 
     mode = "入库" if args.save else "浏览器模式（不入库）"
     print(f"批量采集：{len(keywords)} 个关键词 × 平台 {platforms} × 源 {sources}，"
-          f"limit={args.limit}，{mode}\n")
+          f"limit={args.limit}，{mode}")
+    if args.ocr:
+        if "mediacrawler" not in sources:
+            print("提示：--ocr 需要 mediacrawler 源（--platforms xhs --sources mediacrawler），"
+                  "本次不生效。")
+        else:
+            print("OCR 已开启：识别小红书笔记图片中的观点文字。")
+    print()
+
+    source_kwargs = {"mediacrawler": {"ocr": True}} if args.ocr else None
 
     grand_total = 0
     grand_inserted = 0
@@ -85,7 +101,8 @@ def main():
         try:
             posts, errors, summary = orchestrator.collect(
                 kw, platforms=platforms, limit=args.limit,
-                source_names=sources, save=args.save)
+                source_names=sources, save=args.save,
+                source_kwargs=source_kwargs)
         except Exception as exc:
             print(f"    ✗ 失败：{exc}")
             continue

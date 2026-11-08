@@ -49,9 +49,17 @@ def collect(keyword: str,
         source_names = tuple(AVAILABLE_SOURCES.keys())
     errors: list[str] = []
     posts = []
+    # source_kwargs 支持两种形态（可混用）：
+    #   - 平铺字典 {"mc_dir": ...}：传给所有源
+    #   - 按源名覆盖 {"mediacrawler": {"ocr": True}}：只传给对应源
+    common = dict(source_kwargs or {})
+    per_source = {}
+    for name in source_names:
+        if name in common and isinstance(common[name], dict):
+            per_source[name] = dict(common.pop(name))
     for name in source_names:
         try:
-            src = create_source(name, **(source_kwargs or {}))
+            src = create_source(name, **{**common, **per_source.get(name, {})})
         except Exception as exc:  # 适配器构造失败，记录并跳过
             errors.append(f"{name}: 初始化失败 {exc}")
             continue

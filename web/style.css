@@ -6,3 +6,4 @@
 /* 实时搜索视图：独占整行，搜索中禁用按钮 */
 #search-pane{grid-column:1/-1;min-width:0}.search-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:16px}.search-head h2{margin:0}.search-actions{display:flex;align-items:center;gap:12px;flex-wrap:wrap}.import-btn{background:var(--teal);color:white;border:0;padding:10px 18px;border-radius:6px;font-weight:600}.import-btn:disabled{opacity:.6;cursor:wait}#import-msg{font-size:13px;color:var(--muted)}#search-list .record{border-left-color:var(--pale)}
 .more-wrap{text-align:center;padding:18px 0 8px}
+.ocr{margin-top:14px;border-left:3px solid var(--teal);background:var(--pale);padding:10px 14px;border-radius:0 6px 6px 0}.ocr p{margin:4px 0}.ocr .muted{font-size:12px}
