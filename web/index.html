@@ -1,12 +1,20 @@
 <!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>CyberField · 网络文化观察</title><link rel="stylesheet" href="/style.css"></head>
-<body><header><a class="brand" href="/" aria-label="CyberField 首页"><span class="mark">⌘</span> CyberField</a><span class="subtitle">网络文化观察室</span><span class="local">本地资料库</span></header>
-<main><section class="intro"><h1>从一条表达，读懂一场讨论。</h1><button id="reload" class="quiet">刷新资料</button></section>
-<form id="search"><label class="sr" for="query">搜索关键词</label><span aria-hidden="true">⌕</span><input id="query" placeholder="输入关键词，实时搜索 B站 + 豆瓣 + 微博" autocomplete="off"><button>实时搜索</button></form>
-<div class="toolbar"><nav aria-label="视图"><button class="tab active" id="results-tab" aria-pressed="true">资料浏览</button><button class="tab" id="search-tab" aria-pressed="false">实时搜索</button><button class="tab" id="analysis-tab" aria-pressed="false">观察分析</button></nav><span id="count" aria-live="polite">正在读取…</span></div>
-<div class="workspace"><aside class="filters" id="filters"><h2>筛选</h2><label for="platform">来源平台</label><select id="platform"><option value="">全部平台</option></select><label for="kind">内容类型</label><select id="kind"><option value="">全部</option><option value="post">社交帖子</option><option value="comment">评论</option><option value="catalog_item">影视条目</option></select><label for="since">发布时间</label><input type="date" id="since"><button id="reset" class="quiet">清除筛选</button><span class="hint" tabindex="0">ⓘ<span class="hint-text">这里只展示已采集入库的本地样本；筛选不会发起网络采集。</span></span></aside>
-<section id="search-pane" hidden><div class="search-head"><h2>实时搜索</h2><div class="search-actions"><button id="import-btn" class="import-btn" hidden>手动入库</button><span id="import-msg" class="muted" aria-live="polite"></span></div></div><p id="search-summary" class="muted" aria-live="polite"></p><div id="search-list"></div></section>
-<section id="results" aria-label="检索结果"><div id="list"></div><div class="more-wrap"><button id="more" class="quiet" hidden>加载更多</button></div></section>
-<aside id="detail" class="detail"></aside>
-<section id="analysis" hidden><h2>观察分析</h2><section class="chart-card"><h3>讨论时间分布<span class="hint" tabindex="0">ⓘ<span class="hint-text">按当前筛选下的已入库样本统计，非全网热度；影视条目与未知日期不参与。</span></span></h3><div id="timeline" class="chart"></div></section><div class="analysis-grid"><section class="chart-card"><h3>来源平台<span class="hint" tabindex="0">ⓘ<span class="hint-text">当前筛选样本的平台构成。</span></span></h3><div id="distribution"></div></section><section class="chart-card"><h3>常见表达<span class="hint" tabindex="0">ⓘ<span class="hint-text">标题与正文的重复短语统计，仅供浏览线索，非语义主题模型。</span></span></h3><div id="words" class="words"></div></section></div></section>
-</div><footer><p>数据来自公开接口实时采集，仅供个人研究参考；每一条判断都应回到原文核对。</p><span id="status" role="status"></span></footer></main><script src="/app.js"></script></body></html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>CyberField · 搜索</title><link rel="stylesheet" href="/style.css"></head>
+<body>
+<header><span class="brand">CyberField</span><span class="user"><span class="avatar">?</span>访客</span></header>
+<div class="search-bar"><input id="q" placeholder="输入搜索词，自动模糊搜索 B站 / 豆瓣 / 微博…" autocomplete="off"><button id="go">搜索</button></div>
+<div class="layout">
+<aside class="side">
+<section class="user-card"><div class="avatar-lg">?</div><p class="name">访客</p></section>
+<section id="analyze-nav" class="analyze-nav" hidden><h2>数据分析</h2>
+<label><input type="radio" name="dim" value="timeline" checked>时间热度</label>
+<label><input type="radio" name="dim" value="topics">相关话题</label>
+<label><input type="radio" name="dim" value="groups">相关群体</label></section>
+</aside>
+<main>
+<nav class="tabs"><button id="tab-data" class="tab active">详细数据</button><button id="tab-analysis" class="tab">数据分析</button></nav>
+<section id="data-view"><p id="meta" class="meta-line"></p><div id="list"></div><div id="pager" class="pager"></div></section>
+<section id="analysis-view" hidden><p id="chart-title" class="meta-line"></p><div id="chart"></div></section>
+</main>
+</div>
+<script src="/app.js"></script></body></html>

@@ -37,3 +37,4 @@ opencode.jsonc
 private/
 secrets/
 *.log
+ai-records/
