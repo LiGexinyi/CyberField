@@ -126,34 +126,88 @@ function renderGroups(chart,data){
 
 function switchView(v){S.view=v;$('tab-data').classList.toggle('active',v==='data');$('tab-analysis').classList.toggle('active',v==='analysis');$('data-view').hidden=v!=='data';$('analysis-view').hidden=v!=='analysis';if(v==='analysis')showAnalysis();}
 
-/* ---- 平台账号登录 ---- */
-const platLabels={xhs:'小红书',zhihu:'知乎',bili:'B站',wb:'微博'};
-let loginTimer=null,loginPlat=null;
+/* ---- 平台账号（右上角用户入口 → 面板；登录/检查状态/重新登录/退出） ---- */
+let loginPlat=null,loginTimer=null,verifyTimer=null;
+const verifyTimers={};
+const badgeCls={no_profile:'no_profile',pending:'pending',verifying:'verifying',logged_in:'logged_in',expired:'expired',login_failed:'login_failed',unknown:'unknown'};
+
 async function loadAccounts(){
   try{
     const r=await fetch('/api/accounts');
     const d=await r.json();
-    const box=$('accounts');box.replaceChildren();
-    (d.accounts||[]).forEach(a=>box.append(acctRow(a)));
+    const box=$('acct-list');box.replaceChildren();
+    (d.accounts||[]).forEach(a=>box.append(acctCard(a)));
+    $('user-name').textContent=(d.accounts||[]).some(a=>a.state==='logged_in')?'已登录':'访客';
   }catch(e){}
 }
-function acctRow(a){
-  const row=el('div',undefined,'acct'+(a.logged_in?' on':''));
-  row.append(el('span',undefined,'dot'),el('span',a.label,'aname'));
-  if(a.logged_in){row.append(el('span','已登录','tag'));}
-  else{const b=el('button','登录');b.onclick=()=>startLogin(a.platform,a.label);row.append(b);}
-  return row;
+function acctCard(a){
+  const card=el('div',undefined,'acct-card');card.dataset.plat=a.platform;
+  const top=el('div',undefined,'acct-top');
+  top.append(el('span',a.label,'name'),el('span',a.state_label||a.state,'badge '+(badgeCls[a.state]||'')));
+  card.append(top);
+  const sub=el('div',undefined,'acct-sub');
+  if(a.nickname)sub.append(el('span','昵称：'+a.nickname,'nick'));
+  sub.append(el('span','最近验证：'+(a.last_verified_at||'—')));
+  card.append(sub);
+  if(!a.login_supported){card.append(el('div',a.note||'暂不支持登录','acct-note'));return card;}
+  if(a.note)card.append(el('div',a.note,'acct-note'));
+  if(a.state==='verifying'){card.append(el('div','正在验证会话有效性…','acct-note'));return card;}
+  const acts=el('div',undefined,'acct-actions');
+  actionsFor(a).forEach(act=>{
+    const b=el('button',act.lbl);
+    if(act.k==='login')b.className='primary';
+    if(act.k==='logout')b.className='danger';
+    b.onclick=()=>{if(act.k==='login')startLogin(a.platform,a.label);else if(act.k==='verify')doVerify(a.platform);else if(act.k==='logout')doLogout(a.platform,a.label);};
+    acts.append(b);
+  });
+  card.append(acts);
+  return card;
 }
-async function startLogin(platform,label){
+function actionsFor(a){
+  const acts=[];const login=lbl=>acts.push({k:'login',lbl});
+  switch(a.state){
+    case 'no_profile': login('登录');break;
+    case 'pending': acts.push({k:'verify',lbl:'检查状态'});login('登录');break;
+    case 'logged_in': acts.push({k:'verify',lbl:'检查状态'},{k:'login',lbl:'重新登录'},{k:'logout',lbl:'退出'});break;
+    case 'expired': login('重新登录');acts.push({k:'verify',lbl:'检查状态'},{k:'logout',lbl:'退出'});break;
+    case 'login_failed': login('重试登录');break;
+    case 'unknown': acts.push({k:'verify',lbl:'检查状态'},{k:'login',lbl:'重新登录'},{k:'logout',lbl:'退出'});break;
+  }
+  return acts;
+}
+function openPanel(){$('acct-panel').hidden=false;loadAccounts();}
+function closePanel(){$('acct-panel').hidden=true;}
+$('user-btn').onclick=()=>{if($('acct-panel').hidden)openPanel();else closePanel();};
+$('acct-close').onclick=closePanel;
+
+async function doVerify(platform){
+  try{await fetch('/api/verify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({platform})});}catch(e){}
+  if(verifyTimers[platform])return;
+  verifyTimers[platform]=setInterval(async()=>{
+    try{
+      const r=await fetch('/api/verify?platform='+encodeURIComponent(platform));
+      const d=await r.json();
+      if(d.state!=='verifying'){clearInterval(verifyTimers[platform]);delete verifyTimers[platform];loadAccounts();}
+    }catch(e){}
+  },2000);
+}
+async function doLogout(platform,label){
+  if(!confirm('退出登录将清除「'+label+'」在本机的专用登录档案（不影响采集资料与其他平台）。确认退出？'))return;
+  try{await fetch('/api/logout',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({platform})});}catch(e){}
+  loadAccounts();
+}
+
+function startLogin(platform,label){
   loginPlat=platform;
   $('login-title').textContent='扫码登录'+label;
   $('qr-holder').replaceChildren(el('p','正在启动登录…','empty'));
   $('login-status').textContent='';
-  $('qr-retry').hidden=true;
+  $('qr-retry').hidden=true;$('qr-close').hidden=true;$('qr-cancel').hidden=false;
   $('login-modal').hidden=false;
-  try{await fetch('/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({platform})});}
-  catch(e){$('login-status').textContent='启动失败：'+e;return;}
-  if(loginTimer)clearInterval(loginTimer);
+  fetch('/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({platform})})
+    .then(r=>r.json()).then(d=>{if(d.status==='failed'){$('login-status').textContent='启动失败：'+(d.error||'');$('qr-cancel').hidden=true;$('qr-close').hidden=false;}})
+    .catch(e=>{$('login-status').textContent='启动失败：'+e;});
+  clearLoginTimers();
   loginTimer=setInterval(pollLogin,2000);
   pollLogin();
 }
@@ -164,15 +218,41 @@ async function pollLogin(){
     const r=await fetch('/api/login?platform='+encodeURIComponent(loginPlat));
     const d=await r.json();
     if(d.qr)$('qr-holder').replaceChildren(imgFromB64(d.qr));
-    const msgs={starting:'正在启动登录…',qr_ready:'请用手机 App 扫码，等待确认',logged_in:'登录成功，可关闭此窗口',expired:'二维码已过期',failed:'登录失败',idle:'未开始'};
+    const msgs={starting:'正在启动登录…（首次会短暂打开专用浏览器）',qr_ready:'请用手机 App 扫码，等待确认',logged_in:'认证完成，正在验证会话…',expired:'二维码已过期，可重新生成',failed:'登录失败',cancelled:'已取消登录',idle:'未开始'};
     $('login-status').textContent=(msgs[d.status]||d.status)+(d.error?' · '+d.error:'');
-    if(d.status==='logged_in'){clearInterval(loginTimer);loginTimer=null;loadAccounts();setTimeout(closeModal,1200);}
-    else if(d.status==='expired'||d.status==='failed'){$('qr-retry').hidden=false;clearInterval(loginTimer);loginTimer=null;}
+    if(d.status==='logged_in'){
+      clearInterval(loginTimer);loginTimer=null;
+      verifyTimer=setInterval(pollVerify,2000);pollVerify();
+    }else if(d.status==='expired'||d.status==='failed'){
+      $('qr-retry').hidden=false;
+      clearInterval(loginTimer);loginTimer=null;
+    }
   }catch(e){}
 }
-function closeModal(){if(loginTimer){clearInterval(loginTimer);loginTimer=null;}$('login-modal').hidden=true;}
+async function pollVerify(){
+  if(!loginPlat)return;
+  try{
+    const r=await fetch('/api/verify?platform='+encodeURIComponent(loginPlat));
+    const d=await r.json();
+    if(d.state==='verifying'){$('login-status').textContent='正在验证会话有效性…';return;}
+    clearInterval(verifyTimer);verifyTimer=null;
+    if(d.state==='logged_in'){$('login-status').textContent='登录成功（会话已验证）';}
+    else{$('login-status').textContent='验证结果：'+(d.state_label||d.state)+(d.error?' · '+d.error:'');}
+    $('qr-close').hidden=false;$('qr-cancel').hidden=true;
+    loadAccounts();
+  }catch(e){}
+}
+function clearLoginTimers(){if(loginTimer){clearInterval(loginTimer);loginTimer=null;}if(verifyTimer){clearInterval(verifyTimer);verifyTimer=null;}}
+function closeModal(){clearLoginTimers();$('login-modal').hidden=true;loginPlat=null;}
 $('qr-close').onclick=closeModal;
-$('qr-retry').onclick=()=>{if(loginPlat)startLogin(loginPlat,platLabels[loginPlat]||loginPlat);};
+$('qr-retry').onclick=()=>{if(loginPlat)startLogin(loginPlat,$('login-title').textContent.replace('扫码登录','')||loginPlat);};
+$('qr-cancel').onclick=async()=>{
+  try{await fetch('/api/login/cancel',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({platform:loginPlat})});}catch(e){}
+  $('login-status').textContent='已取消登录';
+  clearLoginTimers();
+  setTimeout(closeModal,700);
+  loadAccounts();
+};
 loadAccounts();
 $('go').onclick=()=>search(1);
 $('q').addEventListener('keydown',e=>{if(e.key==='Enter')search(1);});

@@ -1,12 +1,11 @@
 <!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>CyberField · 搜索</title><link rel="stylesheet" href="/style.css"></head>
 <body>
-<header><span class="brand">CyberField</span><span class="user"><span class="avatar">?</span>访客</span></header>
+<header><span class="brand">CyberField</span><button id="user-btn" class="user" title="平台账号"><span class="avatar">?</span><span id="user-name">访客</span><span class="caret">▾</span></button></header>
 <div class="search-bar"><input id="q" placeholder="输入搜索词，自动模糊搜索 B站 / 豆瓣 / 微博…" autocomplete="off"><button id="go">搜索</button></div>
 <div class="layout">
 <aside class="side">
 <section class="user-card"><div class="avatar-lg">?</div><p class="name">访客</p></section>
-<section class="accounts"><h2>平台账号</h2><div id="accounts"></div></section>
 <section id="analyze-nav" class="analyze-nav" hidden><h2>数据分析</h2>
 <label><input type="radio" name="dim" value="timeline" checked>时间热度</label>
 <label><input type="radio" name="dim" value="topics">相关话题</label>
@@ -18,10 +17,15 @@
 <section id="analysis-view" hidden><p id="chart-title" class="meta-line"></p><div id="chart"></div></section>
 </main>
 </div>
+<div id="acct-panel" class="acct-panel" hidden>
+<div class="acct-head"><h3>平台账号</h3><button id="acct-close" class="close-btn" aria-label="关闭">×</button></div>
+<div id="acct-list"></div>
+<p class="acct-foot">Cookie 仅存于本机专用浏览器档案 · 不保存密码 · 退出仅清除该平台会话</p>
+</div>
 <div id="login-modal" class="modal" hidden><div class="modal-box">
 <h3 id="login-title">扫码登录</h3>
 <div id="qr-holder"><p class="empty">正在生成二维码…</p></div>
 <p id="login-status" class="meta-line"></p>
-<div class="modal-actions"><button id="qr-retry" hidden>重新生成</button><button id="qr-close">关闭</button></div>
+<div class="modal-actions"><button id="qr-retry" hidden>重新生成</button><button id="qr-cancel">取消</button><button id="qr-close" hidden>关闭</button></div>
 </div></div>
 <script src="/app.js"></script></body></html>

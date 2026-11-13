@@ -5,7 +5,11 @@
                       按热度排序 → 30 条/页翻页返回；
 2. GET  /api/summaries 轮询接口：返回每条结果的 LLM 总结与热评（后台生成）；
 3. GET  /api/analysis  数据分析：时间热度 / 相关话题 / 相关群体（基于本次
-                      搜索结果统计）。
+                      搜索结果统计）；
+4. 平台账号（阶段 0+1）：GET /api/accounts 各平台登录状态（7 状态机）；
+   POST/GET /api/login 扫码登录（二维码回显 + 自动验证）；/api/login/cancel
+   取消登录；POST /api/verify 检查状态（真实 pong 校验，网络错误→状态未知）；
+   /api/logout 仅清除该平台专用档案。
 
 LLM 总结需要环境变量 LLM_API_KEY（OpenAI 兼容，默认 DeepSeek）；
 未配置时总结列显示为空，搜索本身不受影响。
@@ -18,7 +22,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
-from collect.login_manager import LoginManager
+from collect.account_manager import AccountManager
 from collect.search_pipeline import SearchPipeline
 
 WEB = Path(__file__).resolve().parent.parent / "web"
@@ -49,11 +53,15 @@ class Handler(BaseHTTPRequestHandler):
         qs = parse_qs(urlsplit(self.path).query)
         pipe: SearchPipeline = self.server.pipeline
         if path == "/api/accounts":
-            self._send_json({"accounts": self.server.login_manager.accounts()})
+            self._send_json({"accounts": self.server.account_manager.accounts()})
             return
         if path == "/api/login":
             platform = (qs.get("platform") or [""])[0]
-            self._send_json(self.server.login_manager.poll_login(platform))
+            self._send_json(self.server.account_manager.poll_login(platform))
+            return
+        if path == "/api/verify":
+            platform = (qs.get("platform") or [""])[0]
+            self._send_json(self.server.account_manager.poll_verify(platform))
             return
         if path == "/api/analysis":
             keyword = (qs.get("keyword") or [""])[0]
@@ -100,16 +108,23 @@ class Handler(BaseHTTPRequestHandler):
         except json.JSONDecodeError:
             payload = {}
         if path != "/api/search":
-            if path == "/api/login":
-                platform = str(payload.get("platform") or "").strip()
-                if not platform:
-                    self._send_json({"error": "缺少 platform"})
-                    return
-                job = self.server.login_manager.start_login(platform)
+            am = self.server.account_manager
+            platform = str(payload.get("platform") or "").strip()
+            if path == "/api/login" and platform:
+                job = am.start_login(platform)
                 self._send_json({"ok": job.get("status") != "failed",
                                  "platform": platform,
                                  "status": job["status"],
                                  "error": job.get("error")})
+                return
+            if path == "/api/login/cancel" and platform:
+                self._send_json(am.cancel_login(platform))
+                return
+            if path == "/api/verify" and platform:
+                self._send_json(am.start_verify(platform))
+                return
+            if path == "/api/logout" and platform:
+                self._send_json(am.logout(platform))
                 return
             self.send_error(404)
             return
@@ -159,7 +174,7 @@ def main():
     args = parser.parse_args()
     server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
     server.pipeline = SearchPipeline()
-    server.login_manager = LoginManager()
+    server.account_manager = AccountManager()
     print(f"CyberField: http://127.0.0.1:{args.port}", flush=True)
     print("LLM 总结：", "已启用（LLM_API_KEY）" if __import__(
         "collect.llm", fromlist=["available"]).available()

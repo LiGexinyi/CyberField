@@ -705,6 +705,36 @@ CyberField 最初作为清华大学《AI 编程进阶：方法与实践》课程
   analysis 时间热度 36 点/话题/群体正常；静态页面三文件 200。当前无 LLM
   Key，总结留空（`LLM_API_KEY` 配置后重启即启用）。提交：本次。
 
+### 2026-11-13：平台账号状态机与真实有效性验证（阶段 0+1）
+- 规范要求：cookie 存在 ≠ 已登录，必须经有效性检查；区分 7 态（未登录/待验证/
+  验证中/已登录/已过期/登录失败/状态未知）；网络错误不判失效；登录只认证不采集；
+  账号管理与采集共用同一专用会话；凭据不回传前端、不落日志、不进 git。
+- 新增 `D:\Projects\MediaCrawler\verify_session.py`：无头启动平台专用档案 → 读
+  cookie → 复现各平台 pong（xhs selfinfo / zhihu /api/v4/me / bili nav / wb
+  config）→ 提取昵称 → 单行 JSON 输出 `VERIFY:{kind:ok|missing|invalid|network,
+  nickname}`，绝不输出 cookie；网络异常/风控 → network（≠失效）。
+- 本机无 playwright 捆绑浏览器（ms-playwright 目录为空），两个辅助脚本统一
+  `_find_browser()` 定位系统 Chrome/Edge 并注入 `executable_path`，专用档案仍
+  与日常浏览器隔离。
+- 新增 `collect/account_manager.py`（替换 login_manager.py）：7 状态机 + 状态
+  持久化 `data/accounts.json`（gitignore，仅存状态/昵称/最近验证时间/错误文本）；
+  登录完成自动触发 verify → 直接落到已登录+昵称；检查状态/重新登录/退出/取消
+  登录；退出仅删该平台专用档案。结果映射：ok→已登录 / invalid→已过期 /
+  missing→未登录 / network→状态未知（保留原昵称不降级）。
+- `collect/web_app.py`：新增 `POST /api/verify`、`GET /api/verify?platform=`、
+  `POST /api/login/cancel`、`POST /api/logout`；/api/accounts 改返回 7 态 +
+  昵称 + 最近验证时间 + 游客模式标注（douban=暂不支持登录）。
+- 前端（web 三件套）：账号面板从侧栏移到**右上角「用户」入口**（右侧抽屉）；
+  每平台卡片 = 状态徽章/昵称/最近验证时间/操作（登录/检查状态/重新登录/退出）；
+  登录弹窗支持取消（POST /api/login/cancel）、过期重试、网络异常明确文案；
+  游客模式标注（bili/wb/douban=游客模式，xhs/zhihu=未接入网页搜索）。
+- 修复两处缺陷：`_set_state` 用 `.get` 导致状态不落盘（改 `setdefault`）；
+  取消登录与 reader 收尾竞态覆写状态（cancelled 时 reader 不再动状态）。
+- 验证：`verify_session.py --platform xhs` → `VERIFY:{"kind":"ok","nickname":
+  "假装耍起的紧绷皮燕子"}`；web 端 POST /api/verify → 轮询 → logged_in+昵称+
+  最近验证时间；登录/取消接口起停正常（含 xhs 已登录路径 LOGGED_IN、zhihu 弹码
+  路径 QR: 输出）；静态页三文件 200；单测新增 6 项（共 19 项全通过）。提交：本次。
+
 ### 2026-11-13：网页侧平台账号扫码登录（小红书 / 知乎 / B站 / 微博）
 - 需求：用户打开工作台如何登录小红书账号；知乎现在能不能登。
 - 现状：网页搜索只用游客态三源（B站/豆瓣/微博），小红书/知乎此前只能通过
@@ -751,21 +781,24 @@ $env:LLM_MODEL="deepseek-chat"   # 可选
   多源深搜，按热度排序，30 条/页翻页；结果=标题/平台/日期/LLM 总结/热评/原文；
 - **数据分析**：顶栏切换「详细数据 / 数据分析」，左栏细分「时间热度 /
   相关话题 / 相关群体」，基于本次搜索结果做黑白可视化；
-- **平台账号**：左侧栏按平台显示登录状态（小红书/知乎/B站/微博），未登录时点
-  「登录」弹出二维码扫码登录（登录态存于 MediaCrawler 的 browser_data，不保存
-  密码）；已登录后可用对应平台采集能力；
+- **平台账号**：右上角「用户」入口 → 账号面板（右侧抽屉），每平台显示 7 态
+  徽章/昵称/最近验证时间，操作：登录（扫码，可取消/过期重试）、检查状态（真实
+  pong 校验）、重新登录、退出（仅清除该平台专用档案，不动采集资料与其他平台）；
+  bili/wb/douban 标注游客模式，douban 暂不支持登录；登录态存于 MediaCrawler
+  的 browser_data 专用档案，不保存密码；
 - 侧边栏用户信息区暂为占位，未接账号系统。
 
 ### 新增结构
 ```text
 collect/llm.py               # OpenAI 兼容 LLM 客户端（默认 DeepSeek，无 Key 降级）
 collect/search_pipeline.py   # 模糊扩展→多源搜索→评论增强→后台总结→分析统计
-collect/login_manager.py     # 平台账号扫码登录（二维码捕获 + 状态轮询）
-collect/web_app.py           # 本机 API：/api/search /api/summaries /api/analysis /api/accounts /api/login + 静态页
+collect/account_manager.py   # 平台账号 7 状态机：登录/验证/退出/取消，状态持久化
+collect/web_app.py           # 本机 API：/api/search /api/summaries /api/analysis /api/accounts /api/login /api/verify /api/logout + 静态页
 web/                        # 黑白极简搜索引擎式界面，无构建步骤
 MediaCrawler/login_standalone.py  # MediaCrawler 侧登录辅助（二维码输出 stdout，登录即停）
+MediaCrawler/verify_session.py    # MediaCrawler 侧验证辅助（无头 pong + 昵称，输出 VERIFY: JSON）
 test_collect_data.py        # 旧库、快照、时间与采集隔离回归
 test_collect_regressions.py # 采集边界回归（5 项）
-test_login_manager.py       # 登录管理单元测试（5 项）
+test_account_manager.py     # 账号状态机/验证映射/网络容错/退出隔离（6 项）
 docs/frontend-design.md    # 视觉规范与数据口径
 ```
