@@ -705,6 +705,34 @@ CyberField 最初作为清华大学《AI 编程进阶：方法与实践》课程
   analysis 时间热度 36 点/话题/群体正常；静态页面三文件 200。当前无 LLM
   Key，总结留空（`LLM_API_KEY` 配置后重启即启用）。提交：本次。
 
+### 2026-11-13：网页侧平台账号扫码登录（小红书 / 知乎 / B站 / 微博）
+- 需求：用户打开工作台如何登录小红书账号；知乎现在能不能登。
+- 现状：网页搜索只用游客态三源（B站/豆瓣/微博），小红书/知乎此前只能通过
+  MediaCrawler CLI 扫码登录，网页无登录入口。
+- 新增 `D:\Projects\MediaCrawler\login_standalone.py`：MediaCrawler 侧的登录
+  辅助脚本——挂载 `tools.utils.show_qrcode` 把二维码 base64 单行输出到 stdout
+  （不再弹系统图片窗口），登录完成后 cookie 写入
+  `browser_data/{platform}_user_data_dir`，再把 search/detail/creator 三种抓取
+  入口替换为 no-op 实现「登录即停」；已登录时直接 `LOGGED_IN` 不带码。
+- 新增 `collect/login_manager.py`：子进程管理 + 逐行捕获二维码 + 状态机
+  （starting / qr_ready / logged_in / expired / failed / idle）；`is_logged_in`
+  按 `browser_data/{platform}_user_data_dir/Default/Network/Cookies` 是否存在
+  粗判（真正是否有效由 MediaCrawler 搜索时 pong 自校验）；不保存任何账号密码。
+- `collect/web_app.py`：新增 `GET /api/accounts`（各平台登录状态）、
+  `POST /api/login {platform}`（启动扫码登录）、`GET /api/login?platform=`
+  （轮询状态 + 二维码 base64）；CSP 放开 `img-src data:`（否则二维码图片被拦）。
+- 前端（`web/index.html` / `web/style.css` / `web/app.js`）：侧边栏新增
+  「平台账号」区（状态点 + 已登录/登录按钮），登录按钮打开黑白扫码弹窗，
+  base64 二维码以 data URI 显示，2 秒轮询直至「登录成功」；过期/失败可重试。
+- 知乎说明：MediaCrawler 已内置知乎平台（qrcode 登录），扫码流程与小红书一致；
+  登录态存 `browser_data/zhihu_user_data_dir`，此后可用 mediacrawler 适配器
+  采集知乎（接入网页搜索为后续迭代）。
+- 验证：`login_standalone.py --platform zhihu` 实测浏览器启动→pong 失败→弹出
+  二维码→stdout 单行 `QR:<base64>`（PNG 头 iVBORw0KGgo 校验通过）；web 端
+  `/api/accounts` 返回四平台状态（xhs 已登录/zhihu·bili·wb 未登录）、
+  `/api/login` 起停正常；清理测试残留的 zhihu 半成品档案；CSP img data 生效；
+  单测新增 5 项（共 18 项全通过）。提交：本次。
+
 ## 本地 Web 工作台启动
 在项目根运行（PowerShell）：
 ```powershell
@@ -723,15 +751,21 @@ $env:LLM_MODEL="deepseek-chat"   # 可选
   多源深搜，按热度排序，30 条/页翻页；结果=标题/平台/日期/LLM 总结/热评/原文；
 - **数据分析**：顶栏切换「详细数据 / 数据分析」，左栏细分「时间热度 /
   相关话题 / 相关群体」，基于本次搜索结果做黑白可视化；
+- **平台账号**：左侧栏按平台显示登录状态（小红书/知乎/B站/微博），未登录时点
+  「登录」弹出二维码扫码登录（登录态存于 MediaCrawler 的 browser_data，不保存
+  密码）；已登录后可用对应平台采集能力；
 - 侧边栏用户信息区暂为占位，未接账号系统。
 
 ### 新增结构
 ```text
 collect/llm.py               # OpenAI 兼容 LLM 客户端（默认 DeepSeek，无 Key 降级）
 collect/search_pipeline.py   # 模糊扩展→多源搜索→评论增强→后台总结→分析统计
-collect/web_app.py           # 本机 API：/api/search /api/summaries /api/analysis + 静态页
+collect/login_manager.py     # 平台账号扫码登录（二维码捕获 + 状态轮询）
+collect/web_app.py           # 本机 API：/api/search /api/summaries /api/analysis /api/accounts /api/login + 静态页
 web/                        # 黑白极简搜索引擎式界面，无构建步骤
+MediaCrawler/login_standalone.py  # MediaCrawler 侧登录辅助（二维码输出 stdout，登录即停）
 test_collect_data.py        # 旧库、快照、时间与采集隔离回归
 test_collect_regressions.py # 采集边界回归（5 项）
+test_login_manager.py       # 登录管理单元测试（5 项）
 docs/frontend-design.md    # 视觉规范与数据口径
 ```

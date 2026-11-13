@@ -6,6 +6,7 @@
 <div class="layout">
 <aside class="side">
 <section class="user-card"><div class="avatar-lg">?</div><p class="name">访客</p></section>
+<section class="accounts"><h2>平台账号</h2><div id="accounts"></div></section>
 <section id="analyze-nav" class="analyze-nav" hidden><h2>数据分析</h2>
 <label><input type="radio" name="dim" value="timeline" checked>时间热度</label>
 <label><input type="radio" name="dim" value="topics">相关话题</label>
@@ -17,4 +18,10 @@
 <section id="analysis-view" hidden><p id="chart-title" class="meta-line"></p><div id="chart"></div></section>
 </main>
 </div>
+<div id="login-modal" class="modal" hidden><div class="modal-box">
+<h3 id="login-title">扫码登录</h3>
+<div id="qr-holder"><p class="empty">正在生成二维码…</p></div>
+<p id="login-status" class="meta-line"></p>
+<div class="modal-actions"><button id="qr-retry" hidden>重新生成</button><button id="qr-close">关闭</button></div>
+</div></div>
 <script src="/app.js"></script></body></html>

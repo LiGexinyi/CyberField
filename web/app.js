@@ -125,6 +125,55 @@ function renderGroups(chart,data){
 }
 
 function switchView(v){S.view=v;$('tab-data').classList.toggle('active',v==='data');$('tab-analysis').classList.toggle('active',v==='analysis');$('data-view').hidden=v!=='data';$('analysis-view').hidden=v!=='analysis';if(v==='analysis')showAnalysis();}
+
+/* ---- 平台账号登录 ---- */
+const platLabels={xhs:'小红书',zhihu:'知乎',bili:'B站',wb:'微博'};
+let loginTimer=null,loginPlat=null;
+async function loadAccounts(){
+  try{
+    const r=await fetch('/api/accounts');
+    const d=await r.json();
+    const box=$('accounts');box.replaceChildren();
+    (d.accounts||[]).forEach(a=>box.append(acctRow(a)));
+  }catch(e){}
+}
+function acctRow(a){
+  const row=el('div',undefined,'acct'+(a.logged_in?' on':''));
+  row.append(el('span',undefined,'dot'),el('span',a.label,'aname'));
+  if(a.logged_in){row.append(el('span','已登录','tag'));}
+  else{const b=el('button','登录');b.onclick=()=>startLogin(a.platform,a.label);row.append(b);}
+  return row;
+}
+async function startLogin(platform,label){
+  loginPlat=platform;
+  $('login-title').textContent='扫码登录'+label;
+  $('qr-holder').replaceChildren(el('p','正在启动登录…','empty'));
+  $('login-status').textContent='';
+  $('qr-retry').hidden=true;
+  $('login-modal').hidden=false;
+  try{await fetch('/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({platform})});}
+  catch(e){$('login-status').textContent='启动失败：'+e;return;}
+  if(loginTimer)clearInterval(loginTimer);
+  loginTimer=setInterval(pollLogin,2000);
+  pollLogin();
+}
+function imgFromB64(b64){const im=el('img','');im.src='data:image/png;base64,'+b64;im.alt='扫码登录';return im;}
+async function pollLogin(){
+  if(!loginPlat)return;
+  try{
+    const r=await fetch('/api/login?platform='+encodeURIComponent(loginPlat));
+    const d=await r.json();
+    if(d.qr)$('qr-holder').replaceChildren(imgFromB64(d.qr));
+    const msgs={starting:'正在启动登录…',qr_ready:'请用手机 App 扫码，等待确认',logged_in:'登录成功，可关闭此窗口',expired:'二维码已过期',failed:'登录失败',idle:'未开始'};
+    $('login-status').textContent=(msgs[d.status]||d.status)+(d.error?' · '+d.error:'');
+    if(d.status==='logged_in'){clearInterval(loginTimer);loginTimer=null;loadAccounts();setTimeout(closeModal,1200);}
+    else if(d.status==='expired'||d.status==='failed'){$('qr-retry').hidden=false;clearInterval(loginTimer);loginTimer=null;}
+  }catch(e){}
+}
+function closeModal(){if(loginTimer){clearInterval(loginTimer);loginTimer=null;}$('login-modal').hidden=true;}
+$('qr-close').onclick=closeModal;
+$('qr-retry').onclick=()=>{if(loginPlat)startLogin(loginPlat,platLabels[loginPlat]||loginPlat);};
+loadAccounts();
 $('go').onclick=()=>search(1);
 $('q').addEventListener('keydown',e=>{if(e.key==='Enter')search(1);});
 $('tab-data').onclick=()=>switchView('data');

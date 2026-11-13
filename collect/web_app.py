@@ -18,6 +18,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
+from collect.login_manager import LoginManager
 from collect.search_pipeline import SearchPipeline
 
 WEB = Path(__file__).resolve().parent.parent / "web"
@@ -47,6 +48,13 @@ class Handler(BaseHTTPRequestHandler):
         path = urlsplit(self.path).path
         qs = parse_qs(urlsplit(self.path).query)
         pipe: SearchPipeline = self.server.pipeline
+        if path == "/api/accounts":
+            self._send_json({"accounts": self.server.login_manager.accounts()})
+            return
+        if path == "/api/login":
+            platform = (qs.get("platform") or [""])[0]
+            self._send_json(self.server.login_manager.poll_login(platform))
+            return
         if path == "/api/analysis":
             keyword = (qs.get("keyword") or [""])[0]
             posts = pipe._cache_posts(keyword)
@@ -76,6 +84,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Security-Policy",
                              "default-src 'self'; style-src 'self' 'unsafe-inline'; "
                              "script-src 'self'; connect-src 'self'; "
+                             "img-src 'self' data:; "
                              "frame-ancestors 'none'; base-uri 'none'")
             self.end_headers()
             self.wfile.write(content)
@@ -91,6 +100,17 @@ class Handler(BaseHTTPRequestHandler):
         except json.JSONDecodeError:
             payload = {}
         if path != "/api/search":
+            if path == "/api/login":
+                platform = str(payload.get("platform") or "").strip()
+                if not platform:
+                    self._send_json({"error": "缺少 platform"})
+                    return
+                job = self.server.login_manager.start_login(platform)
+                self._send_json({"ok": job.get("status") != "failed",
+                                 "platform": platform,
+                                 "status": job["status"],
+                                 "error": job.get("error")})
+                return
             self.send_error(404)
             return
         keyword = str(payload.get("keyword") or "").strip()
@@ -139,6 +159,7 @@ def main():
     args = parser.parse_args()
     server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
     server.pipeline = SearchPipeline()
+    server.login_manager = LoginManager()
     print(f"CyberField: http://127.0.0.1:{args.port}", flush=True)
     print("LLM 总结：", "已启用（LLM_API_KEY）" if __import__(
         "collect.llm", fromlist=["available"]).available()
