@@ -89,4 +89,8 @@ main{min-width:0}
 .track{flex:1;background:var(--gray);height:8px;border-radius:2px;overflow:hidden}
 .fill{height:100%;background:var(--black);border-radius:2px}
 .dist .num{color:var(--muted);width:34px;text-align:right}
+.search-progress{display:flex;align-items:center;gap:10px;margin:0 0 16px;padding:12px 14px;border:1px solid var(--line);background:var(--gray);color:var(--muted);font-size:13px;border-radius:4px}
+.search-progress[hidden]{display:none}
+.spinner{width:16px;height:16px;border:2px solid var(--line);border-top-color:var(--black);border-radius:50%;animation:spin .9s linear infinite;flex:none}
+@keyframes spin{to{transform:rotate(360deg)}}
 @media(max-width:860px){.layout{grid-template-columns:1fr}.side{border-right:0;padding-right:0;min-height:0;display:flex;gap:30px;align-items:flex-start}.analyze-nav{margin-top:0}}

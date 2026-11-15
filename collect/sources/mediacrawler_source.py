@@ -25,6 +25,7 @@ from pathlib import Path
 from collect.post import Post, normalize_platform
 from collect.sources.base_source import BaseSource, SourceUnavailable
 from collect.time_utils import normalize_time
+from collect import settings
 
 # 本适配器直接透传 MediaCrawler 的平台码（xhs / bili / wb / zhihu / dy / ks / tieba）。
 _MC_PLATFORM_CODES = {
@@ -54,7 +55,7 @@ class MediaCrawlerSource(BaseSource):
     platforms = ["xiaohongshu", "bilibili", "weibo", "zhihu",
                  "douyin", "kuaishou", "tieba"]
 
-    def __init__(self, mc_dir: str = r"D:\Projects\MediaCrawler",
+    def __init__(self, mc_dir: str = str(settings.MEDIACRAWLER_DIR),
                  mc_python: str | None = None,
                  login: str = "qrcode",
                  ocr: bool = False):

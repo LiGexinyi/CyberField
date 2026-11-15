@@ -5,8 +5,9 @@ from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 from collect.time_utils import normalize_time
+from collect import settings
 
-DEFAULT_DB = Path(__file__).resolve().parent.parent / "data" / "collect.db"
+DEFAULT_DB = settings.COLLECT_DB
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS collected_posts (

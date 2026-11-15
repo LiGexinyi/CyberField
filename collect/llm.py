@@ -11,9 +11,10 @@
 import json
 import os
 import urllib.request
+from collect import settings
 
-_DEFAULT_BASE = "https://api.deepseek.com/v1"
-_DEFAULT_MODEL = "deepseek-chat"
+_DEFAULT_BASE = settings.DEFAULT_LLM_BASE
+_DEFAULT_MODEL = settings.DEFAULT_LLM_MODEL
 
 
 def config() -> dict:
@@ -50,7 +51,16 @@ def chat(messages: list[dict], max_tokens: int = 500,
     try:
         with urllib.request.urlopen(req, timeout=90) as resp:
             data = json.loads(resp.read().decode("utf-8"))
-        return str(data["choices"][0]["message"]["content"]).strip()
+        # 严格校验返回内容：null / 空串 / 非字符串一律视为失败，绝不能
+        # 把 "None" 之类的字符串当成成功总结返回。
+        choices = data.get("choices")
+        if not isinstance(choices, list) or not choices:
+            return None
+        message = choices[0].get("message") if isinstance(choices[0], dict) else None
+        content = (message or {}).get("content")
+        if not isinstance(content, str):
+            return None
+        return content.strip() or None
     except Exception:
         return None
 

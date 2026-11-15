@@ -5,6 +5,11 @@
 由 orchestrator 调度、store 统一入库；新增源不影响既有使用。
 
 模块结构：
+- web_app.py               HTTP路由，调用搜索和账号公开接口
+- search_pipeline.py       搜索组织与内存结果
+- comments.py              评论获取
+- analysis.py              样本统计
+- account_manager.py       专用账号会话管理
 - post.py                  统一数据契约 Post 与平台名规范化
 - sources/base_source.py   BaseSource 抽象接口 + 异常
 - sources/http_client.py   轻量 HTTP 会话（标准库，Cookie/Referer/gzip）
@@ -12,6 +17,8 @@
 - sources/bilibili_source.py     B站游客态搜索适配器（免登录）
 - sources/douban_source.py       豆瓣移动端 rexxar 搜索适配器（免登录）
 - sources/weibo_source.py        微博访客激活搜索适配器（免登录）
+- sources/xhs_source.py          小红书登录态搜索适配器（复用专用档案）
+- sources/zhihu_source.py        知乎登录态搜索适配器（复用专用档案）
 - orchestrator.py          多源调度 / 合并 / 去重
 - store.py                 统一入库（collected_posts 表）与查询/统计
 - demo_cli.py              终端交互式浏览试用入口

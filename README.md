@@ -5,7 +5,7 @@
 
 CyberField 是一个面向中文互联网的网络文化数据采集与本地研究工具，旨在帮助研究者系统收集、整理和追踪网络热梗、流行话题及亚文化现象，为研究其传播机制、演化过程和社会文化意义提供可追溯的原始资料。
 
-目前项目已完成基础 CSV 清洗、SQLite 存储与关键词查询、多源采集框架（`collect/`，已接入 MediaCrawler 并支持终端演示），现已提供本地只读 Web 研究工作台（原生 HTML/CSS/JS + Python 标准库 HTTP 服务），后续扩展深度分析能力（时间线梗演化、群体画像、话题共现、讨论度/热度、态度分析），详细路线见 `docs/roadmap.md`。
+目前保留两条流程：Web搜索工作台通过扩词、多源搜索、评论增强和可选LLM总结展示临时结果（不写库）；终端和批量采集入口可选择写入SQLite。平台账号支持专用会话的登录、验证、取消和退出；网页搜索默认用B站、豆瓣、微博游客态来源，已登录小红书/知乎时自动加入小红书、知乎登录态搜索，结果按平台混合分页（每页同时出现各平台内容，越靠前越热）。搜索组织、评论获取、样本统计现已分模块管理；深度情绪、语义演化与真实群体识别尚未实现。
 
 ## 1. 项目背景
 
@@ -40,8 +40,8 @@ CyberField 的主要目标包括：
 | 数据导出 | CSV、JSON 导出 | 已完成 |
 | 数据采集 | 真实平台接入（合规源优先）、增量更新 | B站/豆瓣/微博已接入；小红书等攻坚中 |
 | 分析引擎 | 时间线梗演化、群体画像、话题共现、讨论度/热度、态度分析 | 规划中（三周计划） |
-| 用户与账号管理 | 注册/登录、平台账号凭据加密存储 | 规划中 |
-| 可视化界面 | 本地只读工作台：检索、来源详情、样本时间分布和重复短语 | 基础版已完成；深度模型未接入 |
+| 平台账号管理 | 专用会话登录、验证、取消、退出及状态面板 | 已有基础实现；未接入网页采集登录态，无多用户注册系统 |
+| Web工作台 | 实时搜索、分页、来源跳转、可选总结和样本统计 | 基础版；会话结果不入库，深度模型未接入 |
 | 话题管理 | 管理研究主题、关键词和衍生表达 | 规划中 |
 | 传播追踪 | 早期记录、话题时间线及传播趋势 | 规划中 |
 | 田野笔记 | 人工标注、收藏与研究记录 | 规划中 |
@@ -60,7 +60,7 @@ CyberField 的主要目标包括：
 | 游客态公开接口 | B站搜索 API、豆瓣移动端 rexxar API、微博访客激活（免登录） | 已接入 |
 | jieba | 中文分词与分析 | 规划中 |
 | transformers | 中文预训练情感模型 | 规划中 |
-| FastAPI + ECharts | Web 可视化仪表盘 | 规划中 |
+| 原生HTML/CSS/JavaScript + Python标准库HTTP | 当前Web工作台 | 已使用；未使用FastAPI/ECharts |
 | JWT + cryptography | 用户会话与凭据加密 | 规划中 |
 | LLM（Ollama / OpenAI 兼容） | 深度分析扩展 | 预留 |
 | Git | 项目版本管理 | 已使用 |
@@ -112,14 +112,15 @@ python -m venv .venv
 
 程序读取 `data/sample_posts.csv`，执行空文本过滤、重复记录删除及发布时间排序，结果保存为 `data/cleaned_posts.csv`。
 
-### 6.4 运行测试
+### 6.4 运行离线测试
 
 ```powershell
-.\.venv\Scripts\python.exe test_clean_posts.py
-.\.venv\Scripts\python.exe test_posts_db.py
+.\.venv\Scripts\python.exe -B -m unittest test_search_web test_comments test_collect_data test_collect_regressions test_account_manager test_task_lifecycle
+.\.venv\Scripts\python.exe -B test_clean_posts.py
+.\.venv\Scripts\python.exe -B test_posts_db.py
 ```
 
-两套独立测试共 20 项（清洗 7 项 + 存储 13 项），测试数据全部自行构造，不依赖样本文件。
+阶段0—3验收共49项通过：搜索/HTTP契约8项、评论文件读取2项、数据契约8项、采集回归5项、账号管理6项、CSV清洗7项、旧存储13项。测试使用虚构帖子、模拟网络/模型及临时目录，不运行真实采集或账号登录。
 
 ### 6.5 运行多源采集 Demo（终端）
 
@@ -129,56 +130,67 @@ python -m venv .venv
 
 终端交互菜单：采集新关键词（可多平台；**B站/豆瓣/微博游客态免登录**，MediaCrawler 平台需首次扫码）、浏览本地库、统计概览、导出 CSV/JSON。采集数据存于 `data/collect.db`，导出到 `data/export/`。目标架构与分析规划见 `docs/roadmap.md`。
 
-## 7. 项目文件结构
+## 7. 当前项目结构
 
 ```text
 CyberField/
-├── .gitignore
-├── README.md
-├── requirements.txt
-├── clean_posts.py           # 数据清洗
-├── posts_db.py              # SQLite 存储与关键词查询（cp2_B 合并）
-├── test_clean_posts.py      # 清洗测试（7 项）
-├── test_posts_db.py         # 存储测试（13 项）
-├── AGENTS.md
-├── collect/                 # 多源采集框架（新增）
-│   ├── post.py              # 统一数据契约 Post
-│   ├── orchestrator.py      # 多源调度 / 合并 / 去重
-│   ├── store.py             # 采集库入库 / 查询 / 统计
-│   ├── demo_cli.py          # 终端交互式 Demo
-│   └── sources/             # 适配器（base_source / mediacrawler_source）
-├── data/                    # 数据文件（一律不提交 Git）
-│   ├── sample_posts.csv
-│   ├── cleaned_posts.csv    # 运行生成
-│   ├── collect.db           # 采集库（collected_posts 表）
-│   └── export/              # 导出 CSV / JSON
-├── docs/                    # 文档
-│   ├── code_overview.md     # 代码全览（12 文件）
-│   ├── roadmap.md           # 三周开发计划与六大分析规划
-│   └── 项目背景介绍.md       # 供 AI 协作讨论的背景介绍
-│   └── 第02讲-提示词工程基础.pdf  # 课程材料，不提交 Git
-└── .venv/                   # 本地虚拟环境，不提交 Git
+├── README.md / AGENTS.md / requirements.txt
+├── clean_posts.py / posts_db.py    # 旧CSV与SQLite接口，保留兼容
+├── test_*.py                      # 离线回归与HTTP契约测试
+├── collect/
+│   ├── web_app.py                 # HTTP路由与序列化，不读取私有缓存
+│   ├── search_pipeline.py         # 搜索组织、公开查询接口与缓存
+│   ├── settings.py                # 共享路径与默认值
+│   ├── comments.py                # 评论获取，复用调用方HTTP会话
+│   ├── analysis.py                # 样本统计纯函数
+│   ├── account_manager.py         # 专用账号状态与登录/验证/退出
+│   ├── orchestrator.py            # 来源调度、容错、清洗与限量
+│   ├── post.py / time_utils.py    # 统一契约与时间
+│   ├── cleaner.py / store.py      # Post清洗与可选存储
+│   ├── llm.py / ocr.py            # 可选模型总结与图片识别
+│   ├── demo_cli.py / batch_collect.py
+│   ├── backfill_douban.py         # 旧豆瓣记录只读核对
+│   └── sources/                   # B站/豆瓣/微博/小红书/知乎/MediaCrawler适配器
+├── web/                           # 原生ES模块，无构建步骤
+│   ├── index.html / style.css      # 页面结构与样式
+│   ├── app.js                     # 搜索、分页与初始化
+│   ├── accounts.js                # 账号面板与扫码轮询
+│   ├── analysis.js                # 分析请求与图表
+│   ├── order.mjs                  # 请求身份门卫（防旧响应覆盖最新结果）
+│   └── dom.js                     # 安全DOM与链接工具
+├── docs/                          # 架构全览与重构记录
+├── ai-records/                    # 交互导出，不属于运行代码
+├── data/                          # 本地数据，不提交Git
+└── .venv/                         # 本地环境，不提交Git
 ```
 
-随着功能扩展，将逐步添加采集器、数据库、可视化界面和研究项目管理模块。
+Web数据流：页面 → HTTP路由 → SearchPipeline公开方法 → orchestrator → 适配器 → Post清洗合并 → 内存结果；后台评论由comments模块获取，总结由llm模块生成，统计由analysis模块计算。终端可选入库流程继续通过store执行。
 
-## 8. 开发计划
+边界、兼容入口和下一轮问题见 `docs/refactor_2026-11-13.md`。`docs/code_overview.md`只维护模块职责与调用关系，不再内嵌会过时的整份源代码。
 
-- [x] 建立项目与 Git 仓库
-- [x] 完成项目说明文档
-- [x] 实现 CSV 基础清洗与去重
-- [x] 为清洗程序编写测试
-- [x] 创建项目独立 Python 虚拟环境
-- [x] 配置 `.gitignore` 和依赖文件
-- [ ] 设计统一的网络帖子数据结构
-- [ ] 建立 SQLite 本地资料库
-- [ ] 实现基础检索与数据导出
-- [ ] 接入首个符合访问规则的真实数据源
-- [ ] 实现采集任务管理和增量更新
-- [ ] 构建话题传播时间线
-- [ ] 开发本地可视化界面
-- [ ] 添加人工标签和田野笔记
-- [ ] 完善测试、异常处理和使用文档
+## 8. 当前完成进度与后续安排
+
+- [x] CSV清洗、SQLite导入/检索、采集库与互动快照
+- [x] Post类型、时间规范化、来源调度与异常隔离
+- [x] B站/豆瓣/微博游客态来源和外部MediaCrawler适配器
+- [x] Web扩词搜索、分页、来源跳转、评论与可选LLM总结
+- [x] 平台账号面板、专用会话登录/验证/取消/退出基础实现
+- [x] 评论与统计模块拆分，Web层通过公开接口读取搜索结果
+- [x] 新增HTTP契约及评论读取回归，本轮49项离线检查通过
+- [x] 总结任务终态、关闭入口及账号任务代次隔离（离线回归通过）
+- [x] 共享路径及搜索、分页、评论和模型默认配置集中管理
+- [ ] 登录态接入实际采集（阶段3 网页搜索并入登录会话，待后续）
+- [x] 搜索缓存 TTL/容量/失败重试与同词并发去重（阶段4）
+- [ ] 搜索覆盖与各源数量口径核验（初步原因已记录，待真实网络核验）
+- [x] HTTP 请求体与参数校验、热度计数解析、模型空内容防护（阶段2）
+- [x] 账号取消绑定任务：退出后迟到取消不再恢复登录态；前端失败有反馈（阶段3）
+- [x] 前端按搜索、账号、图表和DOM工具拆分
+- [x] 前端请求身份门卫：乱序响应不覆盖用户最后一次有效操作
+- [x] 分析口径名称纠正：高频短语 / 平台与作者（阶段5，API 键不变）
+- [ ] UI视觉与交互的后续改进
+- [ ] 语义、情绪、真实群体观点与演化分析及人工评估
+- [ ] 定时任务、多用户系统、人工标签与田野笔记
+
 
 ---
 
@@ -802,3 +814,300 @@ test_collect_regressions.py # 采集边界回归（5 项）
 test_account_manager.py     # 账号状态机/验证映射/网络容错/退出隔离（6 项）
 docs/frontend-design.md    # 视觉规范与数据口径
 ```
+
+
+### 2026-11-13：搜索模块渐进重构（阶段0—2）
+- 目标：保持搜索HTTP契约与产品行为，减少Web入口对内部缓存的耦合。
+- 基线：原有39项离线测试通过；新增test_search_web.py的8项HTTP/搜索契约测试在重构前通过。
+- 修改：SearchPipeline增加search_page/get_posts/result_details/analysis_for公开方法；web_app不再访问私有缓存；评论逻辑抽至collect/comments.py，统计纯函数抽至collect/analysis.py。保留原调用入口委托转发。
+- 兼容：不改来源、限量、热度算法、评论筛选、统计口径或入库行为；旧CSV工具、存储、登录管理和前端保持原样。
+- 验收：同一批8项HTTP/搜索契约在重构前后均通过，另补2项小红书JSONL评论读取验证；加原39项共49项全部通过。无真实网络、模型付费调用、数据迁移或登录操作；未执行Git提交/推送。
+- 文档：同步架构与完成进度，更新docs/code_overview.md，新增docs/refactor_2026-11-13.md；阶段3—5尚未执行。
+
+
+### 2026-11-13：共享配置整理（阶段3）
+- 新增collect/settings.py，集中项目路径、MediaCrawler路径、网页分页、搜索来源、评论数量、后台并发与LLM默认值；模块级旧常量仍保留为别名，兼容原测试和调用方式。
+- 不读取或迁移凭据、不创建真实目录；默认值及显式mc_dir参数覆盖行为不变。配置在导入时加载，修改后重启服务。
+- 计数解析暂未强行合并：MediaCrawler解析会strip且异常行为与评论解析不同；改变它们属于单独修复，避免以重构名义改变结果。
+- 验证：49项离线测试全部通过；共享默认MediaCrawler路径与显式mc_dir覆盖检查通过，全部采集模块语法检查通过。后台状态、账号并发和任务关闭仍待阶段4。
+
+
+### 2026-11-13：后台任务状态与账号竞态修复（阶段4）
+- 已先复现：总结在评论阻塞时过早done；异常无明确终态；缺少关闭入口；旧账号验证在退出后恢复logged_in。
+- 修改：总结任务明确queued/running/completed/skipped/failed/cancelled状态，旧done字段保留；账号按平台串行操作并使用代次校验回写；取消恢复登录前快照，退出先使旧任务失效；新增close接口。
+- 验证：新增11项事件控制的生命周期测试通过；仅使用虚构数据、模拟进程和临时目录。未执行真实登录、清理真实档案或调用模型。
+- HTTP兼容：原字段保留，/api/summaries新增status/error，搜索行新增summary_status/summary_error；前端区分排队、执行、未配置、失败和取消。账号操作增加平台白名单。
+- 关闭限制：取消排队任务并阻止迟到回写；正在执行的HTTP不能强杀线程，需等待原请求超时。close限时等待并返回是否全部结束；账号仅尝试回收自己启动的进程树。真实浏览器进程退出效果未实测。
+
+- 阶段4最终验收：40项unittest + 清洗7项 + 旧存储13项，共60项通过；JavaScript语法和Git差异格式检查通过。未提交或推送Git。
+
+
+### 2026-11-13：前端按职责拆分（阶段5）
+- app.js保留搜索、分页与页面入口；新增dom.js共享安全DOM工具、analysis.js图表视图、accounts.js账号交互。通过显式import与状态读取函数协作，不引入框架和构建工具。
+- HTML改用原生ES模块，后端静态白名单补充三个脚本；CSS、页面布局、API路径及业务规则保持不变。离开页面清理轮询，不自动退出账号。
+- 浏览器验收：模块加载、搜索、翻页、总结轮询、三种分析视图、账号面板、二维码/取消/检查/退出、空结果/错误反馈和390px手机无横向溢出均通过，无JS运行异常；只用模拟API，不发真实平台请求。
+
+
+可选前端验收脚本：`tools/check_web_ui.py`，需要独立安装了Playwright的测试环境和Chrome，不是应用运行依赖。本次复用MediaCrawler已有Playwright环境运行：
+```powershell
+D:\Projects\MediaCrawler\.venv\Scripts\python.exe -B tools/check_web_ui.py
+```
+浏览器使用独立无头会话，登录/退出等API在测试中被拦截为假响应，不操作账号。
+
+- 阶段5最终验收：原60项离线测试通过，四个JS模块语法和Git差异检查通过；浏览器模拟API验收通过。验收脚本曾出现请求已发出但记录尚未写入的竞态，已改为等待响应完成，未改动产品逻辑。无Git提交/推送。
+
+
+### 2026-11-14：前端请求身份与乱序修复（阶段1：防止前端串结果）
+- 目标：人为反转响应顺序时，页面必须始终对应最后一次有效操作。
+- 失败样例先行：`tools/check_web_ui.py` 新增乱序验收——先搜 slow（页面内
+  包装 fetch 延迟 1.2s 发出真实请求）、马上搜 fast（立即返回）。修复前复现
+  `Actual value: 资料-slow`：迟到的 slow 响应覆盖了 fast 结果。实现细节：
+  阻塞 Playwright 路由处理器会让请求串行化，达不到并发乱序；改用
+  `page.add_init_script` 包装页面 fetch 才真正制造乱序。
+- 新增 `web/order.mjs`：请求身份门卫 `requestGate`（next/peek/latest）。
+  「启动新操作」的请求（搜索/翻页/统计）用 `next()` 使旧请求失效；轮询类
+  请求用 `peek()` 捕获身份不推进，响应返回后再校验 `latest(id)` 且关键词
+  一致才允许应用。
+- `web/app.js`：`search`/`go` 登记身份并在响应与错误路径校验；`pollSummaries`
+  用 `peek()`+关键词双校验，换词/换页后旧轮询不再写 `S.rows`、不再清掉新
+  定时器。
+- `web/analysis.js`：统计请求登记身份，响应到达后重读状态再渲染（避免旧
+  关键词响应配新 dim 渲染）。
+- `web/accounts.js`：`loadAccounts` 面板渲染身份守卫；登录弹窗 `pollLogin`/
+  `pollVerify` 捕获会话身份，取消或切换平台后旧平台的迟到响应不再写弹窗。
+- `collect/web_app.py`：静态白名单与 mime 映射补充 `/order.mjs`。
+- 新增 `test_frontend_order.mjs`（Node 无依赖）：4 组乱序场景回归
+  （搜索覆盖/换词轮询/翻页作废/登录换平台）。
+- 验证：修复前浏览器乱序验收失败（资料-slow）；修复后验收通过且原有用例
+  不变；Node 回归 4 组 PASS；40 项 unittest + 清洗 7 项 + 旧存储 13 项共
+  60 项通过。未提交 Git（按约定仅在用户要求时提交）。
+
+
+### 2026-11-15：输入输出边界 + 账号取消语义 + 缓存并发去重（阶段2—4）与口径纠正（阶段5）
+- 失败样例先行：
+  - HTTP：数组/null/数字请求体此前 `json.loads` 后直接 `.get` 会 500；page/
+    size 坏类型被静默回退为 1/30（统一成功）；Content-Length 无上限。现改为
+    `_read_json_object` 校验（对象类型 / 大小上限 64KB / 无效长度），
+    keyword 必须字符串且 ≤100 字符，page 整数 ≥1，size 整数且 10~100，
+    违规一律 400/413 明确报错，不再静默回退。
+  - 热度：`_hot_score` 遇 `"1.4万"` 直接 `float()` 抛 ValueError 中断整次
+    搜索。新增 `_count` 解析器（数字/逗号/万/亿，非法值按 0），仅用于热度
+    排序，不合并其他模块的计数解析器。
+  - 模型：`llm.chat` 对 `content: null` 返回字符串 `"None"`，会被当成成功
+    总结。现严格校验类型与非空，null/空/非字符串一律返回 None。
+  - 账号：已登录→重新登录→退出→迟到取消会把登录前快照恢复成已登录
+    （"复活"已退出登录态）。`_advance` 现在标记旧任务 `superseded`，
+    `cancel_login` 只取消仍在进行中的任务（starting/qr_ready/失败/过期/
+    自动验证中）；无任务、已被退出等新操作替换、登录已完成时返回
+    `cancelled:false` 且无副作用。另修正问题9：`last_verified_at` 只有
+    `apply_verify_result`（真实验证结果）才更新，登录失败/取消/退出等
+    非验证操作不再冒充验证记录。
+  - 前端：`accounts.js` 多处 fetch 不检查状态码，取消失败仍显示"已取消"、
+    退出失败无提示。现统一用 `dom.js` 新增的 `fetchTimeout`（8s 超时）并
+    检查 `r.ok`/业务字段，失败明确提示；轮询带超时边界。
+- 阶段4 缓存与并发：`search_page` 改为 `_get_or_run`——同词并发只让一个
+  线程执行真实采集，其余线程等待复用；失败结果也发布给等待者（不卡死），
+  冷却期（10s）后再次访问自动重试；成功结果带 TTL（300s），过期自动重搜；
+  缓存容量上限（32 词），超出淘汰最早写入。配置集中在
+  `collect/settings.py`（SEARCH_CACHE_TTL / MAX_ENTRIES / FAIL_RETRY_SECS /
+  INFLIGHT_TIMEOUT）。
+- 阶段5 口径纠正：分析 API 键不变（timeline/topics/groups/platforms），
+  但 `topics` 实际是正文正则短语频次、`groups` 是平台×作者计数，前端展示名
+  由「相关话题/相关群体」改为「高频短语/平台与作者」，analysis.py 与
+  README 补充口径说明（不是主题模型/群体识别）。覆盖不足的初步原因已记录：
+  扩展词只补搜 B站、主词 limit≈size/3、每页展示 30 条但只采集 size*3，
+  待真实网络核验后调整。
+- 新增测试：test_llm.py（5 项模型边界）；test_search_web 增补 HTTP 校验
+  5 项、并发去重/TTL/失败重试/容量 4 项、热度解析 2 项；test_task_lifecycle
+  增补退出后迟到取消、登录完成后迟到取消 2 项；test_account_manager 增补
+  last_verified_at 只随真实验证更新 1 项。
+- 验证：unittest 40→59 项全过；清洗 7 项、旧存储 13 项、Node 乱序回归
+  4 组全过；浏览器验收（含乱序场景与更新后的取消 mock）PASS；真实启动
+  `python -m collect.web_app` 冒烟：数组/null/坏 page 均 400、空关键词保持
+  200 契约。未提交 Git（按约定仅在用户要求时提交）。
+
+### 2026-11-15（续）：任务化搜索显示真实进度 + 知乎扫码登录缺陷修复
+- 搜索过程可视化（用户反馈：黑盒等待 + 搜索偏慢）：
+  - 新增 `POST /api/search/start`（立即返回 done/running/failed，同词并发去
+    重，缓存命中直接 done）、`GET /api/search/progress?task=`（轮询真实进度
+    step/collected/errors）；`POST /api/search` 保留同步语义兼容旧调用方。
+  - `run_search` 主词（3 源）与扩展词（B站）并行采集（`SEARCH_COLLECT_
+    WORKERS=3`），时长从串行求和降为最慢词，单词失败不拖累其他词；全部词
+    失败且无结果时结果标记 failed，缓存层按冷却期重试（保持既有失败语义）。
+  - 前端搜索改为「启动任务→轮询进度→取结果」：进度条展示真实步骤、已找到
+    条数与耗时，超时（180s）与失败明确提示；任务有界缓存、close 时 running
+    任务标 failed。
+- 知乎扫码登录修复（用户反馈：浏览器跳转后不出二维码就结束）：
+  - 根因：外部 MediaCrawler 知乎登录用 `canvas.Qrcode-qrcode` 单选择器等
+    30s，页面未出二维码即超时崩溃退出（退出码1），前端永远收不到二维码，
+    且 `_login_reader` 把真实原因吞成笼统「登录失败」。
+  - 在 CyberField 侧自建 `tools/zhihu_login_standalone.py`（不改外部
+    MediaCrawler）：系统 Chrome + 专用档案持久上下文（与日常浏览器隔离），
+    直连 passport.zhihu.com/login 扫码页，多选择器截取二维码，失败回退
+    知乎首页+点开登录弹窗；仍读不到则发 `QR_MISSING` 并保留浏览器窗口，
+    支持窗口内扫码兜底（轮询 z_c0 判定成功）。
+  - `account_manager`：zhihu 登录改用自建脚本并传 `--profile` 专用档案；
+    `_login_reader` 新增 `QR_MISSING`/`qr_missing` 状态、保留输出尾部并
+    提取可读失败原因（替代笼统提示），`poll_login` 透出 `qr_error`；
+    前端账号面板展示二维码读取失败原因。
+- 新增测试：test_account_manager 增补登录协议 5 项（QR 成功、QR_MISSING+
+  窗口内扫码成功、崩溃原因提取、出码后失败按过期、zhihu 专用脚本与档案
+  命令）；test_search_web 增补任务化/进度 5 项（start 在途→done、缓存命中
+  done、同词去重、未知任务 idle、缺 task 400）。
+- 验证：unittest 59→69 项全过；清洗 7 项、旧存储 13 项、Node 乱序回归 4 组
+  全过；浏览器验收（含搜索进度 mock 场景）PASS；真实服务冒烟：`/api/search/
+  start` 空词 200、非法词 400、`/api/search/progress` 缺 task 400、首页与
+  app.js 已带进度 UI。8899 服务已重启为新代码。未提交 Git。
+
+### 2026-11-15（续2）：网页搜索接入小红书登录态搜索
+- 背景：用户反馈「目前只有B站和豆瓣，没有小红书，我已登录」。网页搜索此前
+  只用 B站/豆瓣/微博游客态；小红书需登录态，且 MediaCrawler 全流程（浏览器+
+  逐条详情+评论）对单次网页搜索过重（开可见窗口、分钟级耗时）。
+- 方案（不改外部 MediaCrawler）：自建 `tools/xhs_search_standalone.py`，复用
+  MediaCrawler 的 `XiaoHongShuClient`（xhshow 纯算法签名）只取搜索列表：
+  - 系统 Chrome + 小红书专用档案持久上下文（无头），注入 `libs/stealth.min.js`
+    反检测脚本；等 SPA 刷新会话 cookie 后读取；pong 校验登录态；
+  - 搜索页大小固定传 20（小红书搜索接口限制，传其他值会静默返回空——实测
+    page_size=5 返回空、20 正常返回）；
+  - stdout 单行 JSON 协议 `{"ok":true,"items":[...]}` / `{"ok":false,"reason":...}`；
+    登录态失效/浏览器启动失败/风控等返回可读原因，退出码 0/1。
+- 新增适配器 `collect/sources/xhs_source.py`（`xhs_api`）：子进程调用脚本、
+  解析 JSON 转统一 Post（标题取 `note_card.display_title`，extra 带
+  liked/collected/comment/shared 热度）；未登录/失败抛 SourceUnavailable 由
+  调度器跳过，不影响其他源。
+- `settings.py`：`SEARCH_PLATFORMS=("xhs","bili","douban","wb")`、
+  `SEARCH_SOURCES=("xhs_api","bilibili_api","douban_api","weibo_api")`、
+  新增 `XHS_SEARCH_SCRIPT`；账号面板 xhs `search_mode` 改为「登录态搜索」。
+- 新增测试：test_xhs_source 10 项（display_title/note_card 转换、假脚本协议、
+  登录失效/风控友好原因、跨平台静默空、健康检查、注册表、末行 JSON）。
+- 验证：unittest 69→79 项全过；真实冒烟（用户已登录的小红书档案）：
+  脚本 `--keyword 奶茶 --limit 5` 返回真实笔记 JSON，适配器 `search()` 端到端
+  返回 3 条（标题/链接/热度齐全，UTF-8 正确）；失败路径（假 Chrome 路径）
+  返回 `browser_launch_failed` 单行 JSON。8899 已重启为新代码（首页 200、
+  账号面板 xhs=登录态搜索、state=logged_in）。未提交 Git。
+
+### 2026-11-15（续3）：修复网页搜索仍无小红书内容（清洗器删空正文）
+- 背景：用户续测网页搜索「仍然没有搜索到小红书平台内容」。端到端复现定位根因：
+  `run_search` 调 `orchestrator.collect` 时 `clean` 默认开启，内部 `cleaner.clean_posts`
+  只保留 `text.strip()` 非空的帖子；而小红书**搜索列表卡片没有 desc 正文**（标题在
+  `note_card.display_title`），适配器产出 `text=""`，5 条真实数据全部被清洗器当空
+  文本删除 → 网页结果集里小红书内容完全消失。
+- 修复 `collect/sources/xhs_source.py::_to_post`：正文缺省时回退用标题
+  （`text = desc or title or ""`），保证有标题的卡片不会被清洗器误删。
+- 补充回归测试 test_xhs_source 1 项：`text` 回退标题 + 帖子过 `cleaner.clean_posts`
+  不被删（empty_removed=0）；实测真实数据 5 条中 4 条通过清洗（剩 1 条连标题都没
+  有，属真正的空卡片，按设计删除）。
+- 验证：unittest 79→80 项全过；重启 8899 后走完整 Web API 链路真实搜索「奶茶」，
+  结果集平台分布 `bilibili 84 / xiaohongshu 19 / douban 19 / weibo 8`，共 130 条
+  去重后结果、errors 为空，小红书 19 条带真实 explore 链接与 xsec_token；
+  前端 `dom.js` 已有 `xiaohongshu:'小红书'` 平台徽章映射，可正常展示。未提交 Git。
+
+### 2026-11-15（续4）：修复知乎登录二维码前端不显示（passport 域名下线）
+- 背景：用户反馈知乎登录时「前端二维码位置从来没加载出来东西」，每次只能手动
+  在脚本弹出的浏览器窗口里扫码。端到端复现定位根因：
+  - `tools/zhihu_login_standalone.py` 第 1 步直连 `passport.zhihu.com/login`——
+    **该域名已下线（DNS NXDOMAIN，实测不解析）**，45 秒 DNS 失败后回退；
+  - 回退走 `www.zhihu.com` 时，专用档案**已登录**，直接进首页不会出现
+    signin 二维码 → 脚本走 `QR_MISSING` 兜底 → 前端二维码区永远空白、
+    登录模态框一直显示「启动登录」。
+- 实测确认：登出态访问 `www.zhihu.com` 会自动跳到 `https://www.zhihu.com/signin`，
+  二维码仍是 `<canvas class="Qrcode-qrcode">`（原选择器可匹配，仅 URL 失效）。
+- 修复 `tools/zhihu_login_standalone.py`：
+  - `_LOGIN_URL` 改为 `https://www.zhihu.com/signin`（现用二维码登录页）；
+  - 新增「已登录快速路径」：启动后先查档案 cookie，存在 `z_c0` 立即输出
+    `LOGGED_IN` 退出，不再卡启动等待；
+  - `_find_qr` 等待状态从 `attached` 改为 `visible`，并补充 `canvas[alt='二维码']`
+    选择器；新增 `--headless` 参数供自动化验证。
+- 验证（真实浏览器只读打开登录页）：
+  - 登出态（临时档案）：脚本输出 `QR:<base64>`，解码为 10671 字节有效 PNG
+    （魔数 `\x89PNG`）——前端二维码区可正常渲染；
+  - 已登录（真实档案）：立即 `LOGGED_IN`，退出码 0；
+  - Web API 端到端：`POST /api/login` → 快速路径 `logged_in` → `/api/verify`
+    → 面板 zhihu `logged_in`（昵称「看山」，验证时间刷新）；
+  - unittest 80 项全过。未提交 Git。
+
+### 2026-11-15（续5）：搜索加入知乎 + 多平台混合分页（每页都有 B站/知乎/微博/豆瓣）+ 先出第 1 页
+- 背景（用户三条反馈）：① 知乎能登录了但搜索里没有知乎内容；② B站占比大头且
+  非常集中，每一页里 B站/小红书/知乎/微博内容都要有显示；③ 至少 10 页，可以先
+  搜索一部分先显示第 1 页，越靠前点赞/观看/投币/讨论等热度指标越靠前。
+- 知乎登录态接入网页搜索（复用续4 已登录的专用档案）：
+  - 新增 `tools/zhihu_search_standalone.py`：无头系统 Chrome + 知乎专用档案，
+    注入 stealth，先访首页再访搜索页拿搜索态 cookie，复用 MediaCrawler
+    `ZhiHuClient`（search_v3 签名）调 `/api/v4/search_v3` 翻页（每页 20）；
+    pong 校验登录态；stdout 单行 JSON 协议与小红书脚本一致。
+  - 修真实缺陷：httpx 按 ASCII 编码请求头，中文关键词放进 referer 直接抛
+    `UnicodeEncodeError`（MediaCrawler 原版 referer 是 ASCII 的 "python" 才没
+    踩到）——referer 里关键词改百分号编码后搜索成功。
+  - 新增适配器 `collect/sources/zhihu_source.py`（`zhihu_api`）：子进程调用脚本
+    转统一 Post（extra 带 voteup/comment 热度）；未登录/风控抛 SourceUnavailable
+    由调度器跳过；注册进 `collect/sources/__init__.py`。
+  - `settings.py`：`SEARCH_PLATFORMS=("xhs","bili","zhihu","douban","wb")`、
+    `SEARCH_SOURCES` 加 `zhihu_api`、新增 `ZHIHU_SEARCH_SCRIPT`、
+    `DEFAULT_PAGE_SIZE=20`、`SEARCH_COLLECT_PER_SOURCE=80`；账号面板 zhihu
+    `search_mode` 改为「登录态搜索」。
+- 多平台混合分页（`collect/search_pipeline.py`）：
+  - `run_search` 分两阶段：**主词多源深搜完成即发布 partial 快照**（前端先显示
+    第 1 页）→ 再补扩展词（B站）合并去重发布最终结果；进度查询对 partial 仍标记
+    running 但带 collected，`start_search` 对 partial 不误判 done。
+  - `_balanced_order` 平台混合排序：各平台内部按热度降序，再按页均分轮转——每页
+    同时出现各平台内容、平台内越靠前越热；单平台退化为热度降序（兼容旧分页测试）。
+  - `_hot_score` 热度指标扩展：新增 `voteup`（知乎赞同）、`attitudes_count`
+    `reposts_count`（微博）、`favorites` `coin` `rating_count`（收藏/投币/评分）
+    等，各平台都能正确参与热度排序。
+  - `tools/xhs_search_standalone.py` 支持翻页（页间 3s 防 461）且翻页失败只保留
+    已拿到主词页、不整体失败；微博源加翻页尝试（实测游客态第 2 页起返回 HTML，
+    实际仍只能拿到第 1 页约 8 条，分块混合把这 8 条铺到前 8 页各 1 条）。
+- 前端（`web/app.js`）：搜索请求显式带 size=20；进度轮询中一旦 `collected≥20`
+  先渲染第 1 页（扩展词后台继续补，完成后刷新）；卡片新增知乎赞同（`e.voteup`）
+  与微博点赞（`e.attitudes_count`）展示。
+- 新增测试：test_zhihu_source 10 项（字段映射/正文回退标题过清洗/limit 截断/
+  假脚本协议/登录失效与风控友好原因/健康检查/注册表）；test_search_web 增补
+  4 项（平台混合每页齐全、单平台降序兼容、partial 快照与最终结果、partial 进度
+  running 且第 1 页可取）。
+- 验证：
+  - unittest 80→94 项全过；`node test_frontend_order.mjs` 4 组乱序回归 PASS。
+  - 知乎脚本冒烟（真实已登录档案）：`--keyword 奶茶 --limit 5` 返回 5 条真实
+    回答（赞同 3525/19124 等，带评论数与链接）。
+  - 重启 8899 后真实搜索「奶茶」：**268 条去重、14 页（≥10 页）**；进度轮询
+    观察到主词 124 条发布后先出第 1 页（partial 阶段真实存在）；第 1/2/6 页
+    均为 `bilibili 15 / zhihu 2 / weibo 1 / douban 2` 混合，平台内热门前置
+    （首行 B站 640 万播放、第二行知乎 1.9 万赞同）；errors 为可读失败原因。
+  - 账号面板：xhs/zhihu 均 `logged_in`，知乎 `search_mode=登录态搜索`。
+  - 已知遗留：小红书因本轮连续翻页搜索触发 461 验证码被临时风控（登录态仍在，
+    搜索接口需冷却恢复；脚本已容错不丢页 1 结果）；微博游客态仍只有第 1 页量，
+    要提升需微博登录态搜索（可仿 xhs/zhihu 方式后续接入）。未提交 Git。
+
+### 2026-11-15（续6）：代码整理去冗余（功能不变，仅清理）
+- 背景：用户要求先通读现有代码再整理，去除冗余内容，保证去除后仍可完成全部
+  现有功能，且不做代码内容的大幅度修改。
+- 清理项（均经全仓 AST 扫描 + 精确 grep 确认无任何引用后移除）：
+  - 未使用导入 4 处：`account_manager.py` 的 `Path`、`search_pipeline.py` 的
+    `_like_num`（兼容导入，全仓无使用者）、`weibo_source.py` 的
+    `parsedate_to_datetime`、`sources/__init__.py` 的 `SourceUnavailable`
+    （各源均直接从 base_source 导入）。
+  - 死方法 2 处：`search_pipeline.py` 的 `_cache_posts` 与 `_xhs_comments_from_jsonl`
+    （注释标「兼容旧入口」但自重构起无任何调用者，评论读取统一走 comments 模块、
+    列表读取统一走 get_posts）；同步修订 `docs/refactor_2026-11-13.md` 兼容说明。
+- 文档整理（仅描述，不改行为）：
+  - `collect/__init__.py`、`docs/code_overview.md` 模块清单补上
+    `xhs_source.py` / `zhihu_source.py`，并新增「阶段5更新」段（94 项测试）；
+  - `demo_cli.py` 顶部源清单与 BANNER 补齐 小红书/知乎 登录态源。
+- 验证：unittest 94 项全过（同基线）；`node test_frontend_order.mjs` 4 组 PASS；
+  全仓 AST 未使用导入扫描 4→0；`import collect.*` 冒烟通过。未提交 Git。
+
+### 2026-11-15（续7）：检查点4 报告整理与交付准备
+- 背景：按课程检查点4 要求整理交付内容（report.md + ai-records + attachments +
+  project 完整 GitLab 仓库）。
+- 完成：
+  - 新增检查点4 报告（见 `data/checkpoint4-attachments/report.md`，最终随压缩包
+    `2024012044_葛芯夷_checkpoint4.zip` 交付）：对照原设计（roadmap）说明完成情况、
+    开发经过、计划调整、正常/边界检查记录与 AGENTS.md 使用情况。
+  - `docs/roadmap.md` 追加「五·补、开发中计划调整与完成情况」章节，作为 PLAN
+    文档（原设计与任务计划 + 完成情况 + 调整说明）。
+  - 补齐 AI 交互记录：复用 `data/_export_sessions.py` 从 opencode 会话库导出
+    11-09 / 11-13 / 11-14 / 11-15 四天记录，`ai-records/` 现在覆盖
+    2026-10-18 → 2026-11-15 全程（10-18/10-27/11-03/11-07/11-08 为既有文件）。
+  - 附件素材：94 项 unittest 日志、前端乱序回归 PASS 日志。
+- 验证：unittest 94 项全过；`node test_frontend_order.mjs` PASS；导出的
+  ai-records 各文件消息数与 opencode 会话库一致。本阶段所有改动（含检查点3 之后
+  的未提交改动）作为检查点4 一次提交（提交编号见 `git log` 最新一条）。

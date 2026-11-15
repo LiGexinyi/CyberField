@@ -14,8 +14,8 @@
 import json
 import random
 import re
+import time
 import urllib.parse
-from email.utils import parsedate_to_datetime
 
 from collect.post import Post, normalize_platform
 from collect.sources.base_source import BaseSource, SourceUnavailable
@@ -28,6 +28,9 @@ _ACTIVATE_URL = "https://visitor.passport.weibo.cn/visitor/visitor"
 _SEARCH_API = "https://m.weibo.cn/api/container/getIndex"
 # 微博正文/话题里带 <a> / <span> 等 HTML 标签，需要剥掉。
 _TAG_RE = re.compile(r"<[^>]+>")
+# 翻页上限与页间延迟：游客态高频翻页易被 432 风控，控制单次请求量。
+_MAX_PAGES = 4
+_PAGE_DELAY = 0.5
 
 
 class WeiboApiSource(BaseSource):
@@ -41,45 +44,59 @@ class WeiboApiSource(BaseSource):
 
     def search(self, keyword: str, platform: str | None = None,
                limit: int = 20) -> list[Post]:
-        """搜索关键词，返回微博帖子列表。"""
+        """搜索关键词，返回微博帖子列表（必要时翻页凑够 limit）。"""
         # 只服务微博平台（兼容 MediaCrawler 码 wb）。
         if normalize_platform(platform or "weibo") != "weibo":
             return []
         if not self._activate_visitor():
             raise SourceUnavailable("微博访客激活失败（风控或接口变动）")
         cid = f"100103type=1&q={keyword}"
-        try:
-            data = self._session.get_json(
-                _SEARCH_API,
-                params={"containerid": cid, "page": 1},
-                referer=f"https://m.weibo.cn/search?containerid={urllib.parse.quote(cid)}",
-            )
-        except Exception as exc:
-            raise SourceUnavailable(f"微博搜索请求失败：{exc}") from exc
-        if data.get("ok") not in (1, True, "1"):
-            raise SourceUnavailable(f"微博接口 ok={data.get('ok')}，可能被风控")
-        cards = (data.get("data") or {}).get("cards") or []
-        # 微博卡片有两种形态：直接含 mblog 的普通卡片，以及 card_group 卡片组
-        # （组内混有用户/话题/微博卡片）。全部提取 mblog，并按 mid 去重。
+        target = max(int(limit), 1)
         seen: set[str] = set()
         posts = []
-        for card in cards:
-            if not isinstance(card, dict):
-                continue
-            batch: list[dict] = []
-            if card.get("mblog"):
-                batch.append(card["mblog"])
-            for gc in card.get("card_group") or []:
-                if isinstance(gc, dict) and gc.get("mblog"):
-                    batch.append(gc["mblog"])
-            for mblog in batch:
-                mid = str(mblog.get("id") or "")
-                if mid and mid in seen:
+        page = 1
+        while len(posts) < target and page <= _MAX_PAGES:
+            try:
+                data = self._session.get_json(
+                    _SEARCH_API,
+                    params={"containerid": cid, "page": page},
+                    referer=f"https://m.weibo.cn/search?containerid={urllib.parse.quote(cid)}",
+                )
+            except Exception as exc:
+                if posts:
+                    break  # 已有一部分结果，降级返回
+                raise SourceUnavailable(f"微博搜索请求失败：{exc}") from exc
+            if data.get("ok") not in (1, True, "1"):
+                if posts:
+                    break  # 晚页被风控：保留已拿数据
+                raise SourceUnavailable(f"微博接口 ok={data.get('ok')}，可能被风控")
+            cards = (data.get("data") or {}).get("cards") or []
+            # 微博卡片有两种形态：直接含 mblog 的普通卡片，以及 card_group 卡片组
+            # （组内混有用户/话题/微博卡片）。全部提取 mblog，并按 mid 去重。
+            collected = 0
+            for card in cards:
+                if not isinstance(card, dict):
                     continue
-                if mid:
-                    seen.add(mid)
-                posts.append(self._to_post(mblog, keyword))
-        return posts[:max(int(limit), 1)]
+                batch: list[dict] = []
+                if card.get("mblog"):
+                    batch.append(card["mblog"])
+                for gc in card.get("card_group") or []:
+                    if isinstance(gc, dict) and gc.get("mblog"):
+                        batch.append(gc["mblog"])
+                for mblog in batch:
+                    mid = str(mblog.get("id") or "")
+                    if mid and mid in seen:
+                        continue
+                    if mid:
+                        seen.add(mid)
+                    posts.append(self._to_post(mblog, keyword))
+                    collected += 1
+            if not cards or collected == 0:
+                break  # 没有更多结果了
+            page += 1
+            if len(posts) < target and page <= _MAX_PAGES:
+                time.sleep(_PAGE_DELAY)
+        return posts[:target]
 
     # ---------------------------------------------------------------- 内部实现
     def _activate_visitor(self) -> bool:
