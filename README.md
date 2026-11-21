@@ -1,5 +1,15 @@
 # CyberField
 
+## 快速入门
+
+**[下载 CyberField Windows 便携版（64 位）](https://github.com/LiGexinyi/CyberField/releases/download/windows-2026.11.22/CyberField-Windows-x64.zip)**
+
+1. 将 ZIP 完整解压，双击 `Start-CyberField.cmd`，工作台会在默认浏览器中打开。
+2. 搜索关键词。需要登录平台时，点右上角，选平台并在 Chrome 或 Edge 专用窗口登录。登录后关闭专用窗口，工作台会验证状态。
+3. 使用 AI 时，在「数据分析 → AI 分析」里选择服务商并填写自己的模型名和 API Key。
+
+适用于 Windows 10/11 64 位，内置 Python 和依赖。平台登录、在线搜索和 AI 分析需要联网。
+
 **网络热梗采集与传播演化研究工具**  
 *An Open-Source-Oriented Toolkit for Online Meme Collection and Evolution Research*
 
