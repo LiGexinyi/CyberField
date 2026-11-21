@@ -2,8 +2,11 @@
 
 HTTP会话由搜索管道传入；本模块不负责搜索、模型调用或后台调度。
 """
-import re
+import logging
 from collect import settings
+from collect.num_utils import parse_count_int
+
+logger = logging.getLogger(__name__)
 
 _HOME_URL = "https://www.bilibili.com/"
 _VIEW_API = "https://api.bilibili.com/x/web-interface/view"
@@ -32,6 +35,8 @@ def fetch_comments(p, session, max_comments=settings.MAX_COMMENTS) -> list[str]:
                     for r in reps[:max_comments]
                     if (r.get("content") or {}).get("message")]
         except Exception:
+            # 评论是尽力而为的补充数据，失败降级为空；原因留日志。
+            logger.debug("B站评论获取失败（bvid=%s）", bvid, exc_info=True)
             return []
     if p.platform == "xiaohongshu":
         return xhs_comments_from_jsonl(p, max_comments=max_comments)
@@ -64,6 +69,7 @@ def xhs_comments_from_jsonl(p, max_comments=settings.MAX_COMMENTS, data_dir=None
                     continue
                 hits.append(r)
         except OSError:
+            logger.debug("评论 JSONL 读取失败：%s", f, exc_info=True)
             continue
     hits.sort(key=lambda r: -_like_num(r.get("like_count")))
     return [(h.get("content") or "").strip() for h in hits[:max_comments]
@@ -71,12 +77,5 @@ def xhs_comments_from_jsonl(p, max_comments=settings.MAX_COMMENTS, data_dir=None
 
 
 def _like_num(value) -> int:
-    """'1.4万' → 14000；解析失败返回 0。"""
-    try:
-        s = str(value or "").replace(",", "")
-        m = re.match(r"^([\d.]+)(万)?$", s)
-        if not m:
-            return 0
-        return int(float(m.group(1)) * 10000) if m.group(2) else int(float(m.group(1)))
-    except ValueError:
-        return 0
+    """'1.4万' → 14000；解析失败返回 0。实现统一见 collect.num_utils。"""
+    return parse_count_int(value)

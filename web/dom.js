@@ -8,3 +8,11 @@ export function fetchTimeout(url,init={},timeout=10000){
   const signal=init.signal??AbortSignal.timeout(timeout);
   return fetch(url,{...init,signal});
 }
+/** POST JSON 便捷封装：统一请求头、序列化与默认超时。 */
+export function postJSON(url,body,timeout=8000){
+  return fetchTimeout(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)},timeout);
+}
+/** 从错误响应中读取服务端 error 字段，取不到时退回 HTTP 状态码。 */
+export async function errorText(response,fallback='请求失败'){
+  try{const data=await response.json();return data&&data.error?data.error:fallback+'（HTTP '+response.status+'）';}catch{return fallback+'（HTTP '+response.status+'）';}
+}

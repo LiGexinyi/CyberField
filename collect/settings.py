@@ -3,14 +3,34 @@
 保留原默认值。来源自己的分页/筛选规则仍留在对应适配器，避免误共用。
 """
 from pathlib import Path
+import os
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = PROJECT_ROOT / "data"
 WEB_DIR = PROJECT_ROOT / "web"
 COLLECT_DB = DATA_DIR / "collect.db"
 ACCOUNT_STATE_FILE = DATA_DIR / "accounts.json"
-MEDIACRAWLER_DIR = Path(r"D:\Projects\MediaCrawler")
-MEDIACRAWLER_PYTHON = MEDIACRAWLER_DIR / ".venv" / "Scripts" / "python.exe"
+
+
+def _find_mediacrawler_dir() -> Path:
+    """定位 MediaCrawler 仓库：优先环境变量，再探测常见相对位置。"""
+    # 支持本机/部署环境显式指定，避免把绝对路径写死进代码。
+    env_dir = os.environ.get("MEDIACRAWLER_DIR")
+    candidates = [Path(env_dir)] if env_dir else []
+    candidates += [
+        PROJECT_ROOT.parent / "MediaCrawler",          # 与本仓库同级（D:\projects\MediaCrawler）
+        PROJECT_ROOT / "MediaCrawler",                 # 作为子目录放入本项目
+    ]
+    for candidate in candidates:
+        if (candidate / "main.py").exists():
+            return candidate
+    # 都找不到时返回第一个候选，让 health_check 给出“路径错误”提示。
+    return candidates[0]
+
+
+MEDIACRAWLER_DIR = _find_mediacrawler_dir()
+MEDIACRAWLER_PYTHON = Path(os.environ.get(
+    "MEDIACRAWLER_PYTHON", MEDIACRAWLER_DIR / ".venv" / "Scripts" / "python.exe"))
 LOGIN_SCRIPT = MEDIACRAWLER_DIR / "login_standalone.py"
 # 知乎登录改用 CyberField 自建脚本（外部 MediaCrawler 的知乎二维码读取
 # 在部分页面会超时崩溃，自建脚本直连 passport 扫码页并支持窗口内扫码兜底）。
@@ -22,7 +42,9 @@ ZHIHU_SEARCH_SCRIPT = PROJECT_ROOT / "tools" / "zhihu_search_standalone.py"
 XHS_JSONL_DIR = MEDIACRAWLER_DIR / "data" / "xhs" / "jsonl"
 DEFAULT_PAGE_SIZE = 20
 # 网页搜索主词每个平台的目标采集条数（多平台混合分页至少要凑出 10+ 页）。
-SEARCH_COLLECT_PER_SOURCE = 80
+SEARCH_COLLECT_PER_SOURCE = 120
+# 暂停网页 AI 摘要，保留评论。
+ENABLE_AI_SUMMARY = False
 SEARCH_PLATFORMS = ("xhs", "bili", "zhihu", "douban", "wb")
 SEARCH_SOURCES = ("xhs_api", "bilibili_api", "zhihu_api", "douban_api", "weibo_api")
 MAX_SEARCH_WORDS = 6

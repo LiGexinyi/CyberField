@@ -203,7 +203,8 @@ class AccountManagerTests(unittest.TestCase):
             job = mgr.start_login("zhihu")
         args = popen.call_args.args[0]
         self.assertEqual(args[0], str(python))
-        self.assertTrue(str(args[1]).endswith("zhihu_login_standalone.py"))
+        self.assertIn(str(am_mod.settings.PROJECT_ROOT / "tools" / "platform_login.py"), args)
+        self.assertEqual(args[args.index("--platform") + 1], "zhihu")
         self.assertIn("--profile", args)
         profile = args[args.index("--profile") + 1]
         self.assertEqual(profile, str(self.mc / "browser_data" / "zhihu_user_data_dir"))

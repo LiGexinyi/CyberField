@@ -51,11 +51,37 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
         self.end_headers()
-        self.wfile.write(content)
+        try:
+            self.wfile.write(content)
+        except (BrokenPipeError, ConnectionResetError):
+            # 客户端已断开：响应无法送达，保持服务进程安静即可。
+            pass
+
+    def setup(self):
+        """限制单个连接读写时长，避免慢速/半开连接长期占用线程。"""
+        super().setup()
+        self.connection.settimeout(30)
+
+    def log_message(self, format, *args):
+        """本地工作台默认不输出访问日志，避免正常轮询刷满控制台。"""
+        pass
 
     def do_GET(self):
-        path = urlsplit(self.path).path
-        qs = parse_qs(urlsplit(self.path).query)
+        """GET 统一兜底：未预期异常返回 JSON 500，而不是裸断连接。"""
+        try:
+            self._handle_GET()
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+        except Exception:
+            try:
+                self._send_json({"error": "服务器内部错误"}, status=500)
+            except Exception:
+                pass
+
+    def _handle_GET(self):
+        parts = urlsplit(self.path)
+        path = parts.path
+        qs = parse_qs(parts.query)
         pipe: SearchPipeline = self.server.pipeline
         if path == "/api/accounts":
             self._send_json({"accounts": self.server.account_manager.accounts()})
@@ -76,7 +102,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/api/analysis":
             keyword = (qs.get("keyword") or [""])[0]
-            self._send_json(pipe.analysis_for(keyword))
+            self._send_json(pipe.analysis_for(keyword, with_text=qs.get("text") == ["1"]))
             return
         if path == "/api/summaries":
             keyword = (qs.get("keyword") or [""])[0]
@@ -142,11 +168,37 @@ class Handler(BaseHTTPRequestHandler):
         return payload
 
     def do_POST(self):
+        """POST 统一兜底：先匹配路由再读请求体，未知路径返回 404。"""
+        try:
+            self._handle_POST()
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+        except Exception:
+            try:
+                self._send_json({"error": "服务器内部错误"}, status=500)
+            except Exception:
+                pass
+
+    def _handle_POST(self):
         path = urlsplit(self.path).path
+        if path not in (
+                "/api/search", "/api/search/start", "/api/search/continue", "/api/topic-interpretation",
+                "/api/login", "/api/login/cancel", "/api/verify", "/api/logout"):
+            self.send_error(404)
+            return
         payload = self._read_json_object()
         if payload is None:
             return  # 校验失败，错误响应已发送
-        if path not in ("/api/search", "/api/search/start"):
+        if path == "/api/topic-interpretation":
+            from collect.topic_ai import interpret
+            try:
+                self._send_json(interpret(payload, self.server.pipeline.get_posts))
+            except ValueError as exc:
+                self._send_json({"error": str(exc)}, status=400)
+            except Exception:
+                self._send_json({"error": "模型服务未能完成请求，请检查网络并重试"}, status=502)
+            return
+        if path not in ("/api/search", "/api/search/start", "/api/search/continue"):
             am = self.server.account_manager
             platform = payload.get("platform")
             if platform is not None and not isinstance(platform, str):
@@ -180,12 +232,31 @@ class Handler(BaseHTTPRequestHandler):
             return  # 校验失败，错误响应已发送
         keyword, page, size = validated
         if path == "/api/search/start":
-            status = pipe.start_search(keyword, size * 3)
+            status = pipe.start_search(keyword, size * 3, progressive=payload.get("progressive") is True)
             self._send_json({"ok": True, "task": keyword, "status": status})
             return
-        result = pipe.search_page(keyword, page=page, size=size)
+        if path == "/api/search/continue":
+            related_word = payload.get("related_word", "")
+            if not isinstance(related_word, str) or len(related_word.strip()) > _MAX_KEYWORD:
+                self._send_json({"error": "补搜词格式错误或过长"}, status=400)
+                return
+            status = pipe.continue_search(keyword, related_word.strip())
+            errors = {"idle": ("这次搜索已不在工作台中，请先重新搜索", 409),
+                      "failed": ("搜索服务暂不可用", 503)}
+            if status in errors:
+                message, code = errors[status]
+                self._send_json({"error": message}, status=code)
+            else:
+                self._send_json({"ok": True, "task": keyword, "status": status})
+            return
+        platforms = payload.get("platforms")
+        if platforms is not None and (not isinstance(platforms, list) or not all(isinstance(v, str) for v in platforms)):
+            self._send_json({"error": "平台筛选格式错误"}, status=400)
+            return
+        result = pipe.search_page(keyword, page=page, size=size, platforms=platforms,
+                                  snapshot=payload.get("snapshot") is True)
         posts = result.pop("posts")
-        result["rows"] = [self._row(p, pipe) for p in posts]
+        result["rows"] = [self._row(p) for p in posts]
         self._send_json(result)
 
     def _validated_search(self, payload):
@@ -196,8 +267,7 @@ class Handler(BaseHTTPRequestHandler):
             return None
         keyword = (keyword or "").strip()
         if not keyword:
-            self._send_json({"rows": [], "total": 0,
-                             "errors": ["关键词不能为空"]})
+            self._send_json({"error": "关键词不能为空"}, status=400)
             return None
         if len(keyword) > _MAX_KEYWORD:
             self._send_json({"error": "关键词过长"}, status=400)
@@ -212,9 +282,9 @@ class Handler(BaseHTTPRequestHandler):
             return None
         return keyword, page, size
 
-    def _row(self, p, pipe: SearchPipeline):
+    def _row(self, p):
         row = post_to_row(p)
-        row.update(pipe.result_details(p.url))
+        row.update(self.server.pipeline.result_details(p.url))
         return row
 
 
@@ -238,9 +308,6 @@ def main():
     server.pipeline = SearchPipeline()
     server.account_manager = AccountManager()
     print(f"CyberField: http://127.0.0.1:{args.port}", flush=True)
-    print("LLM 总结：", "已启用（LLM_API_KEY）" if __import__(
-        "collect.llm", fromlist=["available"]).available()
-          else "未配置（搜索仍可用，总结留空）", flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

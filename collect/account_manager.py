@@ -23,6 +23,7 @@
 """
 
 import json
+import logging
 import os
 import shutil
 import subprocess
@@ -31,6 +32,8 @@ import time
 from collections import deque
 from datetime import datetime
 from collect import settings
+
+logger = logging.getLogger(__name__)
 
 _MC_DIR = settings.MEDIACRAWLER_DIR
 _MC_PYTHON = settings.MEDIACRAWLER_PYTHON
@@ -56,7 +59,7 @@ PLATFORM_INFO = [
     {"platform": "zhihu", "label": "知乎", "login_supported": True,
      "search_mode": "登录态搜索", "note": "登录后网页搜索含知乎"},
     {"platform": "bili", "label": "B站", "login_supported": True,
-     "search_mode": "游客模式", "note": "登录后可解锁 AI 总结"},
+     "search_mode": "游客模式", "note": "请在专用窗口内登录"},
     {"platform": "wb", "label": "微博", "login_supported": True,
      "search_mode": "游客模式", "note": "游客态易被拦截(432)"},
     {"platform": "douban", "label": "豆瓣", "login_supported": False,
@@ -103,7 +106,8 @@ class AccountManager:
                         state["state"] = "pending"
                     self._state[info["platform"]] = state
         except (OSError, ValueError):
-            pass
+            # 状态文件缺失/损坏按空状态启动，但必须留痕（不含凭据）。
+            logger.warning("账号状态文件读取失败，按空状态启动", exc_info=True)
 
     def _save_state(self):
         """持锁写入临时文件后替换，避免半份状态文件。"""
@@ -113,7 +117,8 @@ class AccountManager:
             temporary.write_text(json.dumps(self._state, ensure_ascii=False, indent=2), encoding="utf-8")
             temporary.replace(_STATE_FILE)
         except OSError:
-            pass
+            # 状态落盘失败不影响内存态，但要可排查（例如磁盘满/权限）。
+            logger.warning("账号状态写入失败", exc_info=True)
 
     def accounts(self):
         """返回状态快照，不暴露进程、线程和会话凭据。"""
@@ -186,19 +191,13 @@ class AccountManager:
                 if not self._current(platform, generation):
                     raise RuntimeError("账号服务已关闭")
                 self._login_jobs[platform] = job
-                # 知乎走 CyberField 自建登录脚本（直连扫码页 + 窗口内扫码兜底），
-                # 其余平台沿用 MediaCrawler 的 login_standalone.py。
-                script = _ZHIHU_LOGIN_SCRIPT if platform == "zhihu" else _LOGIN_SCRIPT
+                script = settings.PROJECT_ROOT / "tools" / "platform_login.py"
                 if not script.exists() or not _MC_PYTHON.exists():
-                    job.update(status="failed", error="缺少登录脚本或MediaCrawler解释器")
+                    job.update(status="failed", error="缺少登录脚本或验证环境")
                     self._set_state(platform, "login_failed", None, job["error"])
                     return dict(job)
-                if platform == "zhihu":
-                    cmd = [str(_MC_PYTHON), str(script),
-                           "--profile", str(self.browser_dir(platform))]
-                else:
-                    cmd = [str(_MC_PYTHON), str(script), "--platform", platform,
-                           "--lt", "qrcode", "--type", "search"]
+                cmd = [str(_MC_PYTHON), "-B", "-X", "utf8", str(script),
+                       "--platform", platform, "--profile", str(self.browser_dir(platform))]
                 try:
                     # 创建与登记在同一临界区，退出/关闭始终能找到进程。
                     job["proc"] = subprocess.Popen(
@@ -230,12 +229,15 @@ class AccountManager:
                         job.update(status="qr_missing",
                                    qr_error=line[len("QR_MISSING:"):].strip()
                                    or "未能读取到二维码")
-                    elif line == _LOGIN_READY_MARK:
+                    elif line == "WINDOW_OPEN":
+                        job.update(status="window_open")
+                    elif line in (_LOGIN_READY_MARK, "VERIFY_NOW"):
                         job["status"] = "logged_in"
                     else:
                         tail.append(line)   # 供失败诊断，不缓存二维码大段 base64
             code = process.wait()
         except Exception:
+            logger.exception("登录输出读取线程异常（platform=%s）", platform)
             code = -1
         with self._lock:
             if not self._current(platform, generation):
@@ -333,6 +335,8 @@ class AccountManager:
         try:
             result = self._run_verify(platform, generation)
         except Exception:
+            # 兜底映射为 network，但内部 bug 必须在日志里可见。
+            logger.exception("验证工作线程内部异常（platform=%s）", platform)
             result = {"kind": "network", "nickname": None, "error": "验证进程异常"}
         with self._lock:
             if self._current(platform, generation):
@@ -460,9 +464,9 @@ class AccountManager:
                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                                    timeout=2, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
                 except (OSError, subprocess.TimeoutExpired):
-                    pass
+                    logger.debug("taskkill 结束进程树失败", exc_info=True)
             if process.poll() is None:
                 process.kill()
             process.wait(timeout=1)
         except (OSError, subprocess.TimeoutExpired):
-            pass
+            logger.debug("子进程回收失败", exc_info=True)

@@ -8,7 +8,7 @@
   1. import_posts：首次导入新增数 / 重复导入新增 0 / 相同链接不同平台分别保存
   2. search_posts：关键词命中与时间升序 / 无匹配空列表 / 空与纯空白关键词报错
   3. 特殊字符：单引号、% 、_ 按普通字符处理（不会被 LIKE 通配符误伤）
-  4. 非法输入整批拒绝：缺列 / 必要字段为空 / 非法时间，不留部分记录
+  4. 非法输入整批拒绝：缺列 / 必要字段为空 / 非法时间（含 NaT 字符串），不留部分记录
   5. 边界行为：导入自动创建父目录 / 查询不存在的库报错且不创建文件 /
      空文件与仅表头文件
 """
@@ -315,6 +315,30 @@ def test_import_invalid_time():
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def test_import_nat_time_rejected():
+    """'nan'/'NaT' 字符串会被 pandas 静默解析成 NaT，也必须整批拒绝。"""
+    tmp = Path(tempfile.mkdtemp(prefix="cyberfield_db_test_"))
+    try:
+        rows = [
+            ["微博", "合法记录", "2024-05-01 08:00:00", "https://a.example.com/1"],
+            ["知乎", "NaT 字符串", "NaT", "https://b.example.com/2"],
+        ]
+        csv_path = tmp / "input.csv"
+        db_path = tmp / "posts.db"
+        write_csv(csv_path, rows)
+
+        try:
+            import_posts(csv_path, db_path)
+            raise AssertionError("NaT 时间应报错却未报错")
+        except ValueError as exc:
+            assert "published_at" in str(exc), "错误信息应指向 published_at"
+        assert not db_path.exists() or count_rows(db_path) == 0, \
+            "非法记录应整批拒绝，不得写入部分数据"
+        return "NaT 时间整批拒绝"
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def test_import_creates_parent_dir():
     """导入时自动创建数据库的父目录。"""
     tmp = Path(tempfile.mkdtemp(prefix="cyberfield_db_test_"))
@@ -385,6 +409,7 @@ def run_all():
         test_import_missing_column,
         test_import_empty_field,
         test_import_invalid_time,
+        test_import_nat_time_rejected,
         test_import_creates_parent_dir,
         test_search_missing_db,
         test_empty_csv_files,

@@ -16,16 +16,25 @@ xhs / dy / ks / bili / wb / tieba / zhihu 七个平台的关键词搜索。
 """
 
 import json
+import logging
 import re
 import subprocess
+import threading
 from collections import Counter
 from dataclasses import asdict
 from pathlib import Path
 
+from collect.num_utils import parse_count_int
 from collect.post import Post, normalize_platform
 from collect.sources.base_source import BaseSource, SourceUnavailable
 from collect.time_utils import normalize_time
 from collect import settings
+
+logger = logging.getLogger(__name__)
+
+# MediaCrawler 的 JSONL 输出目录跨运行共享，不能并发做“前后差分”，
+# 否则并发任务会把别的任务新写入的行误判为本次新增。全局串行化该子进程调用。
+_MC_RUN_LOCK = threading.Lock()
 
 # 本适配器直接透传 MediaCrawler 的平台码（xhs / bili / wb / zhihu / dy / ks / tieba）。
 _MC_PLATFORM_CODES = {
@@ -41,13 +50,8 @@ _MAX_COMMENTS_PER_NOTE = 2  # 每条笔记最多保留的高质量评论数
 
 
 def _parse_count(value) -> int:
-    """'1.4万' → 14000；'0' → 0；无法解析返回 0。"""
-    s = str(value or "").strip().replace(",", "")
-    m = re.match(r"^([\d.]+)(万)?$", s)
-    if not m:
-        return 0
-    n = float(m.group(1))
-    return int(n * 10000) if m.group(2) else int(n)
+    """'1.4万' → 14000；'0' → 0；无法解析返回 0。实现统一见 collect.num_utils。"""
+    return parse_count_int(value)
 
 
 class MediaCrawlerSource(BaseSource):
@@ -80,19 +84,21 @@ class MediaCrawlerSource(BaseSource):
         if type(limit) is not int or limit <= 0:
             raise ValueError("limit 必须为正整数")
         # 比较运行前后的记录多重集合，追加同内容也算本次观察。
-        before = Counter(self._fingerprint(p) for p in self.load_results(keyword, code))
-        result = self._run(keyword, code, limit)
-        if result.returncode != 0:
-            tail = (result.stdout or "")[-500:] + (result.stderr or "")[-500:]
-            raise SourceUnavailable(
-                f"MediaCrawler 退出码 {result.returncode}，尾部输出：{tail.strip()}")
-        fresh = []
-        for post in self.load_results(keyword=keyword, platform_code=code):
-            key = self._fingerprint(post)
-            if before[key]:
-                before[key] -= 1
-            else:
-                fresh.append(post)
+        # 差分必须串行：JSONL 目录是跨任务共享的，并发运行会互相污染“新增”。
+        with _MC_RUN_LOCK:
+            before = Counter(self._fingerprint(p) for p in self.load_results(keyword, code))
+            result = self._run(keyword, code, limit)
+            if result.returncode != 0:
+                tail = (result.stdout or "")[-500:] + (result.stderr or "")[-500:]
+                raise SourceUnavailable(
+                    f"MediaCrawler 退出码 {result.returncode}，尾部输出：{tail.strip()}")
+            fresh = []
+            for post in self.load_results(keyword=keyword, platform_code=code):
+                key = self._fingerprint(post)
+                if before[key]:
+                    before[key] -= 1
+                else:
+                    fresh.append(post)
         # limit 只约束笔记；筛选后的评论按笔记附带返回，不占用笔记额度。
         notes = [p for p in fresh if p.record_type != "comment"][:limit]
         comments = [p for p in fresh if p.record_type == "comment"]
@@ -183,6 +189,7 @@ class MediaCrawlerSource(BaseSource):
         try:
             text = path.read_text(encoding="utf-8", errors="replace")
         except OSError:
+            logger.debug("JSONL 读取失败：%s", path, exc_info=True)
             return
         for line in text.splitlines():
             line = line.strip()

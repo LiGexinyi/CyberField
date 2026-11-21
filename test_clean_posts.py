@@ -4,11 +4,10 @@
 不依赖 pytest、不依赖项目里的 sample_posts.csv；测试数据全部自行构造。
 
 覆盖内容：
-  1. clean_dataframe 单元测试：正常清洗 / 全空文本 / 全部重复 / 带列名零行
+  1. clean_dataframe 单元测试：正常清洗 / 空文本 / 重复 / 空 URL 保留 / 非法时间拒绝
   2. clean_posts 的 CSV 读写集成测试（使用临时目录，不污染项目）
 
-注：完全空白文件（0 字节）当前会抛 pandas EmptyDataError，属现有行为，
-本测试未覆盖，详见修改说明。
+注：完全空白文件（0 字节）会触发友好处理，返回全 0 统计并写出表头文件。
 """
 
 import shutil  # 用于删除临时目录
@@ -131,6 +130,35 @@ def test_empty_header_only():
     return "带列名零行"
 
 
+def test_empty_source_url_not_deduplicated():
+    """source_url 为空的记录不去重：同一平台多条空 URL 都应保留。"""
+    rows = [
+        ["微博", "甲", "2024-05-01 08:00:00", ""],
+        ["微博", "乙", "2024-05-02 09:00:00", ""],
+        ["微博", "丙", "2024-05-03 10:00:00", ""],
+    ]
+    cleaned, stats = clean_dataframe(make_df(rows))
+
+    assert stats["dup_removed"] == 0, "空 URL 不应参与去重"
+    assert stats["final"] == 3, "空 URL 记录应全部保留"
+    assert cleaned["text"].tolist() == ["甲", "乙", "丙"]
+    return "空 source_url 不去重"
+
+
+def test_invalid_time_rejected():
+    """published_at 为非法值或 'nan' 时给出清晰错误，不输出坏 CSV。"""
+    rows = [
+        ["微博", "合法", "2024-05-01 08:00:00", "https://a.example.com/1"],
+        ["知乎", "坏时间", "nan", "https://b.example.com/2"],
+    ]
+    try:
+        clean_dataframe(make_df(rows))
+        raise AssertionError("非法时间应报错却未报错")
+    except ValueError as exc:
+        assert "published_at" in str(exc), "错误信息应指向 published_at"
+    return "非法时间拒绝"
+
+
 def test_csv_integration():
     """集成测试：真实 CSV 读写链路（读文件 -> 清洗 -> 写文件 -> 读回核对）。"""
     tmp_dir = Path(tempfile.mkdtemp(prefix="cyberfield_test_"))
@@ -204,6 +232,8 @@ def run_all():
         test_missing_text,
         test_all_duplicated,
         test_empty_header_only,
+        test_empty_source_url_not_deduplicated,
+        test_invalid_time_rejected,
         test_csv_integration,
         test_empty_file_friendly,
     ]

@@ -1,5 +1,5 @@
 /* 页面入口：组织搜索、分页、总结轮询与视图切换，不处理账号和图表细节。 */
-import {$, labels, el, link} from './dom.js';
+import {$, labels, el, link, fetchTimeout, postJSON, errorText} from './dom.js';
 import {createAnalysis} from './analysis.js';
 import {initAccounts} from './accounts.js';
 import {requestGate} from './order.mjs';
@@ -15,60 +15,96 @@ function showProgress(text){
 }
 function hideProgress(){
   $('search-progress').hidden=true;
-  if(progressTimer){clearInterval(progressTimer);progressTimer=null;}
+  if(progressTimer){clearTimeout(progressTimer);progressTimer=null;}
 }
 
-async function search(page=1){
-  const id=gate.next();                  // 本次搜索身份：晚到的旧搜索响应将被丢弃
+let searchGeneration=0, requestedPage=1;
+function search(){
   const kw=$('q').value.trim();if(!kw)return;
-  $('meta').textContent='';$('list').replaceChildren();$('pager').replaceChildren();
-  hideProgress();
-  let page1Shown=false;                  // 主词完成时先渲染一次第 1 页
-  try{
-    // 先启动/复用搜索任务：done 直接取结果，running 轮询真实进度。
-    const r=await fetch('/api/search/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({keyword:kw,page,size:PAGE_SIZE})});
-    if(!r.ok)throw Error('接口 '+r.status);
-    const d=await r.json();
-    if(!gate.latest(id))return;          // 旧请求晚到：不覆盖更新的结果
-    if(!d.ok)throw Error(d.error||'搜索任务启动失败');
-    if(d.status==='done'){await fetchPage(id,kw,page);return;}
-    const t0=Date.now();
-    showProgress('正在搜索「'+kw+'」，准备任务…');
-    progressTimer=setInterval(async()=>{
-      try{
-        const pr=await fetch('/api/search/progress?task='+encodeURIComponent(kw));
-        const pd=await pr.json();
-        if(!gate.latest(id)){hideProgress();return;}
-        if(pd.status==='done'){hideProgress();await fetchPage(id,kw,page);return;}
-        if(pd.status==='failed'){hideProgress();if(gate.latest(id))$('meta').textContent='搜索失败：'+(pd.error||'未知错误');return;}
-        // 主词完成：已找到够一页的量就先渲染第 1 页，扩展词在后台继续补。
-        if(!page1Shown&&typeof pd.collected==='number'&&pd.collected>=PAGE_SIZE){
-          page1Shown=true;
-          await fetchPage(id,kw,page);
-        }
-        if(Date.now()-t0>180000){hideProgress();if(gate.latest(id))$('meta').textContent='搜索超时，请重试';return;}
-        let text=(pd.step||'正在搜索…');
-        if(typeof pd.collected==='number'&&pd.collected>0)text+=' · 已找到 '+pd.collected+' 条';
-        text+=' · '+Math.round((Date.now()-t0)/1000)+'s';
-        showProgress(text);
-      }catch(e){}
-    },700);
-  }catch(e){if(gate.latest(id))$('meta').textContent='搜索失败：'+e;}
+  requestedPage=1;gate.next();clearInterval(pollTimer);pollTimer=null;
+  S={...S,keyword:kw,rows:[],total:0,page:1,pages:1,errors:[],expanded:[kw]};
+  $('analyze-nav').hidden=true;$('more-search').hidden=true;$('more-word').value='';
+  $('ai-analysis').replaceChildren();
+  renderList();renderPager();switchView('data');$('meta').textContent='';
+  runSearch(kw);
 }
 
-async function fetchPage(id,kw,page){
+async function runSearch(kw,more=false){
+  const generation=++searchGeneration;
+  const start=Date.now(), button=$('more-button'), note=$('more-note');
+  hideProgress();button.disabled=true;note.textContent='';
+  showProgress(more?'正在寻找更多内容…':'第 1 轮 · 各平台正在搜索…');
   try{
-    const r=await fetch('/api/search',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({keyword:kw,page,size:PAGE_SIZE})});
-    if(!r.ok)throw Error('接口 '+r.status);
-    const d=await r.json();
-    if(!gate.latest(id))return;          // 旧请求晚到：不覆盖更新的结果
-    S={keyword:d.keyword||kw,rows:d.rows||[],total:d.total||0,page:d.page||1,pages:d.pages||1,expanded:d.expanded||[kw],errors:d.errors||[],view:S.view,dim:S.dim};
-  }catch(e){if(gate.latest(id))$('meta').textContent='搜索失败：'+e;return;}
-  renderMeta();renderList();renderPager();
+    const path=more?'/api/search/continue':'/api/search/start';
+    const body=more?{keyword:kw,related_word:$('more-word').value.trim()}:{keyword:kw,progressive:true};
+    const r=await postJSON(path,body);
+    if(!r.ok)throw Error(await errorText(r,'启动失败'));
+    const started=await r.json();
+    if(generation!==searchGeneration)return;
+    if(started.status==='failed')throw Error('搜索服务暂不可用');
+    if(more)$('more-word').value='';
+    let last=-1;
+    const finish=message=>{
+      hideProgress();$('more-search').hidden=false;button.disabled=false;
+      note.textContent=message||'';
+    };
+    async function poll(){
+      if(generation!==searchGeneration)return;
+      try{
+        const pr=await fetchTimeout('/api/search/progress?task='+encodeURIComponent(kw),{},10000);
+        if(!pr.ok)throw Error('进度暂不可用');
+        const d=await pr.json();
+        if(generation!==searchGeneration)return;
+        if(d.status==='failed'||d.status==='idle'){
+          finish(d.error||'搜索任务暂不可用，请重试。');return;
+        }
+        const count=d.total??d.collected??0;
+        const done=d.status==='done';
+        showProgress((done?'搜索完成':d.step||'搜索中')+' · 已找到 '+count+' 条 · '+Math.floor((Date.now()-start)/1000)+' 秒');
+        if(done){
+          try{
+            if(!more||d.added)await loadPage(requestedPage,!more);
+          }catch(e){
+            if(generation===searchGeneration)finish('结果读取失败：'+e.message);
+            return;
+          }
+          if(generation!==searchGeneration)return;
+          finish(more?d.message:'');
+          if(more&&d.added&&S.view==='analysis'&&S.dim!=='ai')showAnalysis();
+          return;
+        }
+        if(!more&&count>0&&count!==last){await loadPage(requestedPage,true);last=count;}
+      }catch(e){if(generation===searchGeneration)showProgress('进度读取失败，正在重试…');}
+      if(generation===searchGeneration)progressTimer=setTimeout(poll,600);
+    }
+    await poll();
+  }catch(e){
+    if(generation===searchGeneration){
+      hideProgress();button.disabled=false;
+      (more?note:$('meta')).textContent='搜索失败：'+e.message;
+    }
+  }
+}
+$('more-search').onsubmit=e=>{
+  e.preventDefault();
+  if(S.keyword&&!$('more-button').disabled)runSearch(S.keyword,true);
+};
+
+async function loadPage(page,background=false){
+  const id=gate.next(),kw=S.keyword;
+  const platforms=Array.from(document.querySelectorAll('#filters input:checked'),n=>n.value);
+  const r=await postJSON('/api/search',{keyword:kw,page,size:PAGE_SIZE,platforms,snapshot:true});
+  if(!r.ok)throw Error(await errorText(r,'读取结果失败'));
+  const d=await r.json();
+  if(!gate.latest(id))return;
+  // 浏览时保留已显示的卡片，只补满当前页；翻页或切筛选时按最新排序取页。
+  const old=background && page===S.page ? S.rows : [];
+  const seen=new Set(old.map(x=>x.platform+' '+x.url));
+  S.rows=[...old,...d.rows.filter(x=>!seen.has(x.platform+' '+x.url))].slice(0,PAGE_SIZE);
+  S.page=page;S.pages=d.pages;S.total=d.total;S.expanded=d.expanded;S.errors=d.errors;
+  renderMeta();if(!background||old.length<PAGE_SIZE)renderList();renderPager();
   $('analyze-nav').hidden=false;
-  switchView('data');
-  if(pollTimer)clearInterval(pollTimer);
-  pollTimer=setInterval(pollSummaries,2000);
+  if(!pollTimer)pollTimer=setInterval(pollSummaries,2000);
 }
 
 async function pollSummaries(){
@@ -76,7 +112,7 @@ async function pollSummaries(){
   const id=gate.peek();                  // 轮询不产生新身份，只捕获当前身份
   const kw=S.keyword;
   try{
-    const r=await fetch('/api/summaries?keyword='+encodeURIComponent(kw));
+    const r=await fetchTimeout('/api/summaries?keyword='+encodeURIComponent(kw),{},10000);
     const d=await r.json();
     if(!gate.latest(id)||kw!==S.keyword)return;   // 已换词/换页：丢弃旧轮询响应
     const states={};
@@ -87,7 +123,6 @@ async function pollSummaries(){
       if(st&&(row.summary_status!==st.status||(st.done&&!row._done))){row._done=!!st.done;row.summary=st.summary;row.comments=st.comments;row.summary_status=st.status;row.summary_error=st.error;changed=true;}
     });
     if(changed)renderList();
-    const all=(d.states||[]).filter(s=>s.done).length>0;
     if((d.states||[]).length&&(d.states||[]).every(s=>s.done)){clearInterval(pollTimer);pollTimer=null;}
   }catch(e){}
 }
@@ -111,8 +146,7 @@ function card(r){
   head.append(el('span',labels[r.platform]||r.platform,'plat'),el('h3',r.title||r.text?.slice(0,40)||'无标题'));
   a.append(head);
   a.append(el('p',`${r.author||'未知作者'} · ${r.published_at?r.published_at.slice(0,16):'时间未知'}`,'byline'));
-  if(r.summary)a.append(el('div',r.summary,'summary'));
-  else{const messages={idle:'等待总结任务',queued:'总结排队中…',running:'总结生成中…',skipped:'未配置 AI 总结',failed:'总结失败，可查看原文',cancelled:'总结任务已取消',completed:'暂无总结内容'};const note=el('div',messages[r.summary_status]||(r._done?'暂无总结内容':'总结生成中…'),'summary placeholder');if(r.summary_error)note.title=r.summary_error;a.append(note);}
+  if(r.text && r.text !== r.title)a.append(el('p',r.text.slice(0,240)));
   if(r.comments&&r.comments.length){const c=el('div',undefined,'comments');r.comments.forEach(cm=>c.append(el('span','▸ '+cm)));a.append(c);}
   const foot=el('div',undefined,'row-foot');foot.append(link(r));
   const e=r.extra||{},bits=[];
@@ -134,25 +168,18 @@ function renderPager(){
   p.append(prev,el('span',`第 ${S.page} / ${S.pages} 页`,'page-num'),next);
 }
 async function go(page){
-  const id=gate.next();                  // 翻页也是新操作：作废在途搜索/轮询
-  hideProgress();
-  $('list').replaceChildren();$('meta').textContent='加载第 '+page+' 页…';
-  try{
-    const r=await fetch('/api/search',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({keyword:S.keyword,page})});
-    const d=await r.json();
-    if(!gate.latest(id))return;          // 旧翻页晚到：丢弃
-    S.rows=d.rows||[];S.page=d.page||1;S.pages=d.pages||1;S.expanded=d.expanded||S.expanded;
-  }catch(e){if(gate.latest(id))$('meta').textContent='翻页失败：'+e;return;}
-  renderMeta();renderList();renderPager();
+  requestedPage=page;
+  try{await loadPage(page);}catch(e){$('meta').textContent=String(e);}
 }
+$('filters').onchange=()=>{if(S.keyword && (S.total || $('search-progress').hidden || $('analyze-nav').hidden===false))go(1);};
 
 function switchView(v){S.view=v;$('tab-data').classList.toggle('active',v==='data');$('tab-analysis').classList.toggle('active',v==='analysis');$('data-view').hidden=v!=='data';$('analysis-view').hidden=v!=='analysis';if(v==='analysis')showAnalysis();}
 
 // 显式传递状态读取方式；账号模块独立初始化。
 const {showAnalysis}=createAnalysis(()=>S);
 const accounts=initAccounts();
-$('go').onclick=()=>search(1);
-$('q').addEventListener('keydown',e=>{if(e.key==='Enter')search(1);});
+$('go').onclick=search;
+$('q').addEventListener('keydown',e=>{if(e.key==='Enter')search();});
 $('tab-data').onclick=()=>switchView('data');
 $('tab-analysis').onclick=()=>switchView('analysis');
 document.querySelectorAll('input[name=dim]').forEach(r=>r.onchange=()=>{S.dim=r.value;if(S.view==='analysis')showAnalysis();});

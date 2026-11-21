@@ -8,13 +8,19 @@
 <section class="user-card"><div class="avatar-lg">?</div><p class="name">访客</p></section>
 <section id="analyze-nav" class="analyze-nav" hidden><h2>数据分析</h2>
 <label><input type="radio" name="dim" value="timeline" checked>时间热度</label>
-<label><input type="radio" name="dim" value="topics">高频短语</label>
-<label><input type="radio" name="dim" value="groups">平台与作者</label></section>
+<label><input type="radio" name="dim" value="topics">共现话题</label>
+<label><input type="radio" name="dim" value="ai">AI 分析</label>
+</section>
 </aside>
 <main>
 <nav class="tabs"><button id="tab-data" class="tab active">详细数据</button><button id="tab-analysis" class="tab">数据分析</button></nav>
-<section id="data-view"><p id="meta" class="meta-line"></p><div id="search-progress" class="search-progress" hidden><span class="spinner"></span><span id="search-progress-text">正在搜索…</span></div><div id="list"></div><div id="pager" class="pager"></div></section>
-<section id="analysis-view" hidden><p id="chart-title" class="meta-line"></p><div id="chart"></div></section>
+<section id="data-view"><fieldset id="filters"><legend>显示平台</legend><label><input type="checkbox" checked value="bilibili">B站</label> <label><input type="checkbox" checked value="xiaohongshu">小红书</label> <label><input type="checkbox" checked value="zhihu">知乎</label> <label><input type="checkbox" checked value="douban">豆瓣</label> <label><input type="checkbox" checked value="weibo">微博</label> </fieldset><p id="meta" class="meta-line"></p>
+<form id="more-search" class="more-search" hidden>
+  <button id="more-button" type="submit">继续搜索</button>
+  <input id="more-word" type="search" maxlength="100" aria-label="可选补搜词" placeholder="可选 · 相关词">
+  <span id="more-note" role="status" class="meta-line"></span>
+</form><div id="search-progress" class="search-progress" hidden><span class="spinner"></span><span id="search-progress-text">正在搜索…</span></div><div id="list"></div><div id="pager" class="pager"></div></section>
+<section id="analysis-view" hidden><p id="chart-title" class="meta-line"></p><div id="chart"></div><div id="ai-analysis" hidden></div></section>
 </main>
 </div>
 <div id="acct-panel" class="acct-panel" hidden>

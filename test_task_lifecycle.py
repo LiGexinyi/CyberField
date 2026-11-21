@@ -54,7 +54,7 @@ class SummaryLifecycleTests(unittest.TestCase):
 
     def test_failed_model_is_not_reported_as_disabled(self):
         """已配置但返回空结果的模型应明确失败。"""
-        with patch.object(self.pipe, "fetch_comments", return_value=["comment"]), patch("collect.search_pipeline.llm.available", return_value=True), patch("collect.search_pipeline.llm.summarize_post", return_value=None):
+        with patch("collect.settings.ENABLE_AI_SUMMARY", True), patch.object(self.pipe, "fetch_comments", return_value=["comment"]), patch("collect.search_pipeline.llm.available", return_value=True), patch("collect.search_pipeline.llm.summarize_post", return_value=None):
             self.pipe.start_enrichment("topic")
             self.pipe._executor.shutdown(wait=True)
         state = self.pipe.summary_state("topic")[0]

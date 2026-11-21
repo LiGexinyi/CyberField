@@ -12,6 +12,7 @@
 """
 
 import json
+import logging
 import random
 import re
 import time
@@ -20,6 +21,8 @@ import urllib.parse
 from collect.post import Post, normalize_platform
 from collect.sources.base_source import BaseSource, SourceUnavailable
 from collect.sources.http_client import HttpSession
+
+logger = logging.getLogger(__name__)
 
 # 首页（prime / Referer）+ 访客激活 + 搜索接口。
 _HOME_URL = "https://m.weibo.cn/"
@@ -135,6 +138,8 @@ class WeiboApiSource(BaseSource):
                     self._visitor_ok = True
                     return True
         except Exception:
+            # 激活失败由调用方按"未激活"处理；原因留日志便于排查风控。
+            logger.debug("微博访客激活失败", exc_info=True)
             return False
         return False
 

@@ -90,10 +90,63 @@ class SearchHttpTests(unittest.TestCase):
         self.request("/api/search", {"keyword": "topic"})
         self.assertEqual(self.collect.call_count, 1)
 
+    def test_continue_keeps_results_and_advances_pages(self):
+        """进行中的补搜可继续翻页，连续两次补搜前进并去重。"""
+        request_path = "/api/search/continue"
+        payload = {"keyword": "topic"}
+        self.assertEqual(self.request(request_path, payload)[0], 409)
+        self.request("/api/search", payload)
+        started, release = threading.Event(), threading.Event()
+        offsets = []
+
+        def collect_more(word, **options):
+            """每个模拟页返回一条旧记录和一条新的记录。"""
+            offset = options["source_kwargs"]["bilibili_api"]["start_page"]
+            offsets.append(offset)
+            started.set()
+            release.wait(3)
+            return [sample(0), sample(100 + offset)], [], {}
+
+        def wait_done():
+            """等待后台任务终态，避免睡眠猜测线程执行速度。"""
+            deadline = time.monotonic() + 3
+            while time.monotonic() < deadline:
+                _, state = self.request("/api/search/progress?task=topic")
+                if state["status"] == "done":
+                    return state
+                time.sleep(.01)
+            self.fail("补搜未按期完成")
+
+        self.collect.side_effect = collect_more
+        try:
+            _, state = self.request(request_path, payload)
+            self.assertEqual(state["status"], "running")
+            self.assertTrue(started.wait(2))
+            _, before = self.request("/api/search", {**payload, "snapshot": True, "page": 2})
+            self.assertEqual((before["total"], before["page"]), (24, 2))
+            self.request(request_path, payload)
+        finally:
+            release.set()
+        self.assertEqual(wait_done()["added"], 1)
+        self.request(request_path, payload)
+        self.assertEqual(wait_done()["added"], 1)
+        self.assertEqual(offsets, [1, 9])
+        _, after = self.request("/api/search", {**payload, "snapshot": True})
+        self.assertEqual(after["total"], 26)
+
+        self.collect.side_effect = None
+        self.collect.return_value = ([sample(0)], [], {})
+        self.request(request_path, {**payload, "related_word": "补充关键词"})
+        result = wait_done()
+        self.assertEqual((result["added"], result["total"]), (0, 26))
+        self.assertEqual(self.collect.call_args.args[0], "补充关键词")
+        self.assertIn("重复", result["message"])
+
     def test_blank_keyword(self):
-        """空关键词不触发任何来源调用。"""
-        _, data = self.request("/api/search", {"keyword": "  "})
-        self.assertEqual(data, {"rows": [], "total": 0, "errors": ["关键词不能为空"]})
+        """空关键词返回 400，不触发任何来源调用。"""
+        status, data = self.request("/api/search", {"keyword": "  "})
+        self.assertEqual(status, 400)
+        self.assertEqual(data, {"error": "关键词不能为空"})
         self.collect.assert_not_called()
 
     def test_analysis_empty_and_fixed_counts(self):
@@ -103,7 +156,7 @@ class SearchHttpTests(unittest.TestCase):
         self.collect.return_value = ([sample(0), sample(1), sample(2, platform="weibo", author="", published_at="")], [], {})
         self.request("/api/search", {"keyword": "topic"})
         _, result = self.request("/api/analysis?keyword=topic")
-        self.assertEqual(result, {"timeline": [["2026-11-01", 2]], "topics": [{"word": "meme", "count": 6}], "groups": [{"label": "B站 · tester", "count": 2}, {"label": "微博 · 未知作者", "count": 1}], "platforms": [{"platform": "bilibili", "count": 2}, {"platform": "weibo", "count": 1}]})
+        self.assertEqual(result, {"timeline": [["2026-11-01", 2]], "total": 3, "dated": 2, "tagged": 0, "topics": []})
 
     def test_completed_summary_and_comments(self):
         """模拟完成的增强任务，通过HTTP读取评论与空总结。"""
@@ -358,6 +411,21 @@ class SearchLogicTests(unittest.TestCase):
         self.assertEqual(data["posts"][1].title, "meme")
         self.assertEqual(data["errors"], ["source error"])
         self.assertEqual(data["expanded"], ["topic", "variant"])
+
+    def test_enrichment_starts_after_final_result_is_cached(self):
+        """扩展词帖子必须先进入结果缓存，再进入评论/总结队列。"""
+        main_post = sample(0)
+        extended_post = sample(1, platform="weibo", url="https://example.invalid/ext")
+        with patch.object(self.pipe, "fuzzy_expand", return_value=["topic", "variant"]), \
+                patch("collect.search_pipeline.orchestrator.collect",
+                      side_effect=[([main_post], [], {}), ([extended_post], [], {})]), \
+                patch("collect.search_pipeline.llm.available", return_value=False), \
+                patch.object(self.pipe, "fetch_comments", return_value=[]):
+            result = self.pipe._get_or_run("topic", size=90)
+        self.assertEqual([p.url for p in result["posts"]],
+                         [main_post.url, extended_post.url])
+        self.assertIn(main_post.url, self.pipe._summary_cache)
+        self.assertIn(extended_post.url, self.pipe._summary_cache)
 
     def test_comment_success_and_unavailable(self):
         """B站评论成功时取前三条，请求失败或缺ID时降级为空。"""

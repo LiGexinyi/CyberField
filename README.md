@@ -5,7 +5,7 @@
 
 CyberField 是一个面向中文互联网的网络文化数据采集与本地研究工具，旨在帮助研究者系统收集、整理和追踪网络热梗、流行话题及亚文化现象，为研究其传播机制、演化过程和社会文化意义提供可追溯的原始资料。
 
-目前保留两条流程：Web搜索工作台通过扩词、多源搜索、评论增强和可选LLM总结展示临时结果（不写库）；终端和批量采集入口可选择写入SQLite。平台账号支持专用会话的登录、验证、取消和退出；网页搜索默认用B站、豆瓣、微博游客态来源，已登录小红书/知乎时自动加入小红书、知乎登录态搜索，结果按平台混合分页（每页同时出现各平台内容，越靠前越热）。搜索组织、评论获取、样本统计现已分模块管理；深度情绪、语义演化与真实群体识别尚未实现。
+目前保留两条流程：Web搜索工作台通过扩词、多源搜索、评论增强展示临时结果（不写库）；终端和批量采集入口可选择写入SQLite。平台账号支持专用会话的登录、验证、取消和退出；网页搜索默认用B站、豆瓣、微博游客态来源，已登录小红书/知乎时自动加入小红书、知乎登录态搜索，结果按平台混合分页（每页同时出现各平台内容，越靠前越热）。搜索组织、评论获取、样本统计现已分模块管理；深度情绪、语义演化与真实群体识别尚未实现。
 
 ## 1. 项目背景
 
@@ -115,12 +115,14 @@ python -m venv .venv
 ### 6.4 运行离线测试
 
 ```powershell
-.\.venv\Scripts\python.exe -B -m unittest test_search_web test_comments test_collect_data test_collect_regressions test_account_manager test_task_lifecycle
+.\.venv\Scripts\python.exe -B -m unittest test_search_web test_comments test_collect_data test_collect_regressions test_account_manager test_task_lifecycle test_zhihu_source test_xhs_source test_llm
 .\.venv\Scripts\python.exe -B test_clean_posts.py
 .\.venv\Scripts\python.exe -B test_posts_db.py
+node test_frontend_order.mjs
+node --test test_frontend_dom.mjs test_frontend_accounts.mjs
 ```
 
-阶段0—3验收共49项通过：搜索/HTTP契约8项、评论文件读取2项、数据契约8项、采集回归5项、账号管理6项、CSV清洗7项、旧存储13项。测试使用虚构帖子、模拟网络/模型及临时目录，不运行真实采集或账号登录。
+当前常用离线回归共 133 项：Python unittest 96 项、CSV 清洗 9 项、旧存储 14 项、前端 node:test 14 项（DOM 工具与账号状态矩阵）。测试使用虚构帖子、模拟网络/模型及临时目录，不运行真实采集或账号登录。
 
 ### 6.5 运行多源采集 Demo（终端）
 
@@ -1111,3 +1113,63 @@ D:\Projects\MediaCrawler\.venv\Scripts\python.exe -B tools/check_web_ui.py
 - 验证：unittest 94 项全过；`node test_frontend_order.mjs` PASS；导出的
   ai-records 各文件消息数与 opencode 会话库一致。本阶段所有改动（含检查点3 之后
   的未提交改动）作为检查点4 一次提交（提交编号见 `git log` 最新一条）。
+
+### 2026-11-17：高优先级问题修复（审查清单第一轮）
+- 背景：对当前工作区做 bad taste 静态检查后，优先修复会影响功能/数据正确性的高优先级问题。
+- 完成：
+  - `collect/search_pipeline.py`：修复增强任务启动顺序，最终结果写入缓存后再启动评论/总结，避免扩展词帖子永远停在“总结生成中”；移除 `run_search` 内重复 import，并让 HTTP 会话改为线程本地（后台 worker 不再共享 CookieJar）。
+  - `clean_posts.py`：空 `source_url` 不再参与去重，避免同平台多条无链接记录被静默吞并；`published_at` 非法值（含 `nan`/`NaT`）在清洗阶段直接给出清晰错误，不再输出无法入库的 CSV。
+  - `posts_db.py`：`published_at` 为 `NaT` 时按“无法解析为时间”整批拒绝，错误信息仍指向具体数据行。
+  - `collect/settings.py`：MediaCrawler 路径改为支持 `MEDIACRAWLER_DIR` / `MEDIACRAWLER_PYTHON` 环境变量，并自动探测项目同级目录 / 子目录 / 原 Windows 工作区路径，不再只硬编码 `D:\Projects\MediaCrawler`。
+  - `collect/sources/mediacrawler_source.py`：MediaCrawler 的“运行前后 JSONL 差分”串行化，避免并发搜索把其他任务写入的记录误判为本次新增。
+  - `collect/web_app.py`：HTTP 处理增加 30 秒连接读写超时、统一 500 JSON 兜底、BrokenPipe 静默；POST 未知路径先 404 再读请求体；空关键词统一返回 400。
+  - `web/dom.js` / `web/app.js`：新增 `postJSON`/`errorText`，搜索、翻页、进度与总结轮询统一带超时，并从服务端 JSON 错误中取具体原因展示。
+  - `web/accounts.js`：「检查状态」按钮增加在途防抖，验证进行中禁用重复提交，避免双击触发新一轮验证。
+- 测试与验证：
+  - 新增/更新回归：`test_search_web.py`（增强任务在最终缓存发布后才启动）、`test_clean_posts.py`（空 URL 保留 + 非法时间拒绝）、`test_posts_db.py`（NaT 时间整批拒绝）、`test_search_web.py`（空关键词 400）。
+  - 全量离线测试通过：`unittest` 69 项 OK；`test_clean_posts.py` 9 项通过；`test_posts_db.py` 14 项通过；`node test_frontend_order.mjs` 4 组 PASS。
+  - `node --check` 对 `web/app.js`、`web/accounts.js`、`web/dom.js` 语法检查通过。未提交 Git。
+
+### 2026-11-17（续）：重复/冗余内容合并清理（功能不变）
+- 背景：用户要求检查重复或冗余内容，优化后回归验证原有功能不变。
+- 完成：
+  - 计数解析三处合一：新增 `collect/num_utils.py`（`parse_count` / `parse_count_int`，支持万/亿/逗号、非法值归 0），`search_pipeline._count`、`mediacrawler_source._parse_count`、`comments._like_num` 全部改为薄封装调用同一实现。
+  - 登录态脚本源去重：新增 `collect/sources/script_search_source.py` 基类（子进程调用、单行 JSON 解析、错误文案映射），`xhs_source.py` 与 `zhihu_source.py` 从各约 130 行缩到约 55/45 行，只保留平台类属性与 `_to_post` 字段映射；构造参数与公开行为不变。
+  - 小清理：`web/style.css` 删除末尾重复的 `@media(max-width:860px)` 块；`web/app.js` 删除未使用的 `all` 变量；`web_app.py` 合并重复 `urlsplit`、用顶层 `llm.available()` 替代行内 `__import__`、`_row` 去掉冗余 `pipe` 参数；`post.py` 的 `time_utils` 导入提到模块顶部；`web/accounts.js` 剩余手写 JSON POST 统一改用 `postJSON`。
+  - 文档同步：`docs/code_overview.md` 模块索引补 `num_utils.py` 与 `script_search_source.py`。
+- 测试与验证：
+  - 新增 `test_collect_data.py::test_count_parsing_unified`（三处解析同源、非法值归 0）。
+  - 全量回归通过：`unittest` 96 项 OK（含 xhs/zhihu 源 20 项，确认基类重构后接口不变）；`test_clean_posts.py` 9 项；`test_posts_db.py` 14 项；`node test_frontend_order.mjs` 4 组 PASS；`node --check` 前端四个模块语法通过；`compileall` 全量编译通过；源注册表冒烟正常。未提交 Git。
+
+### 2026-11-17（续2）：重构计划 A 批执行（测试基建 + 低风险修复）
+- 背景：按确认的重构 plan 执行 A 批——先建前端测试安全网，再做低风险小修。
+- 完成：
+  - A1 前端测试基建：新增 `test_frontend_dom.mjs`（`el`/`link` 协议白名单/`fetchTimeout`/`postJSON`/`errorText`，6 用例）与 `test_frontend_accounts.mjs`（`actionsFor` 七态矩阵 + 未知状态，8 用例）；用 Node 内置 `node:test` + 手写最小 DOM stub，零新增依赖；`accounts.js` 的 `actionsFor` 提升为模块级纯函数并导出（行为不变）。
+  - A2 错误处理：`accounts.js` 修复 doVerify 错误分支重复消费响应体的自引入瑕疵（S1）；`pollLogin`/`pollVerify` 网络异常不再静默，显示「网络异常，自动重试中…」；`app.js` 进度轮询失败同样给出可感知提示（S2）。
+  - A3 异常吞噬补日志（行为不变）：`account_manager`（状态读写、验证/登录工作线程、进程回收）、`llm`、`comments`、`ocr`、`search_pipeline`（扩词/增强）、`bilibili_source`、`weibo_source`、`mediacrawler_source` 的静默 `except` 统一补 `logger.debug/warning`（不含凭据）；默认日志级别下控制台输出不变。
+  - A4 `run_search` 采集线程池加 try/finally，中途异常不再泄漏线程。
+- 测试与验证：Python `unittest` 96 项 OK；`test_clean_posts.py` 9 项；`test_posts_db.py` 14 项；前端 `node --test` 14 项 PASS + `test_frontend_order.mjs` 4 组 PASS；`node --check` 前端模块语法通过；`compileall` 通过。未提交 Git。
+- 遗留自知：`search_pipeline._http_session` 的主线程特例是兼容旧测试 patch 的权宜之计，后续 C3（测试体系统一）时可顺手清掉。
+
+## 2026-11-21 · Windows 分享版
+
+搜索主词的每源目标提高到 120 条，实际结果受来源分页与去重限制。网页暂停 AI 摘要，保留正文预览和评论。分享包附启动脚本，仅包含代码与依赖清单，平台账号由使用者自行登录。
+
+网页分析按关键词合并本次搜索及 SQLite 已存帖子，按平台、链接去重。按日统计有发布时间的帖子，并按帖子数排列显式共现标签。
+
+网页分轮搜索：每源先取 6 条，再扩大原词范围；不足千条时按可用建议词补充。网页可随时按平台筛选和翻页；失败来源在本次搜索停止重试。
+
+平台登录直接打开专用浏览器访问官方页面。完成登录后关闭该窗口，工作台自动验证。
+
+时间热度采用可选起止日期的折线图。共现分析按篇统计标签和标题正文分词，豆瓣条目简介仅参与文本统计。可在分析页输入服务商、模型和密钥，按需发送聚合统计生成解读。
+
+首轮优先展示社交帖子。书影音目录条目在后续结果中排到社交帖子之后，仍可按豆瓣筛选。
+
+AI 梗解读先检索 B 站公开视频，补充互动数据，再以标题和简介为依据解释含义与用法。推荐列表链接直接来自平台记录，互动数字按可取得的数据展示。
+
+### 续搜与独立 AI 分析
+
+- 目标：在同一搜索下多次扩大样本，并给梗解读独立入口。
+- 网页搜索完成后可点「继续搜索」。留空时继续检查 B 站后续公开页并尝试尚未搜索的建议词。填入补搜词可在当前任务累计相关词结果。重复链接不会增加总数。
+- 「数据分析」增加「AI 分析」选项。切换统计视图会保留当前关键词的解读，发起新搜索会重置表单。
+- 验证：97 项 unittest 通过。浏览器验收覆盖两次补搜、保留页码和 AI 分析切换。B 站「奶龙」实测第 2 页相比第 1 页增加 39 个链接。

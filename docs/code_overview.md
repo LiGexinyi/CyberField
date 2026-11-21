@@ -30,6 +30,7 @@ web/app.js → web_app.Handler → SearchPipeline公开接口
 | `collect/llm.py` | LLM 客户端：OpenAI 兼容接口（默认 DeepSeek），用于内容总结与关键词扩展。 |
 | `collect/ocr.py` | 轻量 OCR 模块：识别小红书笔记图片里的文字。 |
 | `collect/orchestrator.py` | 多源调度器：依次调用所有启用源 → 合并 → 去重 → 清洗 →（可选）入库。 |
+| `collect/num_utils.py` | 互动数统一解析（万/亿/逗号），热度排序与评论筛选共用同一实现。 |
 | `collect/post.py` | 统一帖子数据契约（Post）与平台名规范化。 |
 | `collect/search_pipeline.py` | 搜索引擎式搜索管道：模糊扩展 → 多源搜索 → 评论增强 → LLM 总结 → 分析统计。 |
 | `collect/sources/__init__.py` | 数据源适配器注册表。新增源时： |
@@ -38,9 +39,10 @@ web/app.js → web_app.Handler → SearchPipeline公开接口
 | `collect/sources/douban_source.py` | 豆瓣游客态搜索适配器。 |
 | `collect/sources/http_client.py` | 轻量 HTTP 会话工具（纯标准库实现，无需第三方依赖）。 |
 | `collect/sources/mediacrawler_source.py` | MediaCrawler 适配器。 |
+| `collect/sources/script_search_source.py` | 登录态独立脚本搜索源基类：子进程调用、单行 JSON 解析、错误文案映射。 |
 | `collect/sources/weibo_source.py` | 微博游客态搜索适配器（访客激活流程，免登录）。 |
-| `collect/sources/xhs_source.py` | 小红书登录态搜索适配器（复用专用档案）。 |
-| `collect/sources/zhihu_source.py` | 知乎登录态搜索适配器（复用专用档案）。 |
+| `collect/sources/xhs_source.py` | 小红书登录态搜索适配器（继承脚本源基类，只写字段映射）。 |
+| `collect/sources/zhihu_source.py` | 知乎登录态搜索适配器（继承脚本源基类，只写字段映射）。 |
 | `collect/store.py` | SQLite 存储：兼容旧库、只读查询，以及按采集时刻保存元数据快照。 |
 | `collect/time_utils.py` | 统一时间：秒/毫秒时间戳和带时区日期转为北京时间；未知时间留空。 |
 | `collect/web_app.py` | 搜索引擎式研究工作台：python -m collect.web_app；默认仅监听 127.0.0.1。 |

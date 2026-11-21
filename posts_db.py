@@ -99,6 +99,13 @@ def import_posts(csv_path, db_path):
                 f"第 {idx + 2} 行 published_at 无法解析为时间："
                 f"{published_at!r}，整批未导入"
             )
+        # "nan" / "NaT" 这类字符串可能被 pandas 静默解析成 NaT：NaT 不能
+        # 规范化保存，必须和“完全无法解析”一样给出清晰错误。
+        if pd.isna(parsed):
+            raise ValueError(
+                f"第 {idx + 2} 行 published_at 无法解析为时间："
+                f"{published_at!r}，整批未导入"
+            )
         # 统一规范化为 "YYYY-MM-DD HH:MM:SS" 文本存储，
         # 该格式的字典序 == 时间先后顺序，方便查询直接 ORDER BY 文本。
         rows.append((platform, text,

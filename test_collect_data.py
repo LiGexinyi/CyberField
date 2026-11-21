@@ -95,6 +95,24 @@ class DataTests(unittest.TestCase):
         src=MediaCrawlerSource(mc_dir=str(self.root));p=self.post()
         with patch.object(src,"load_results",side_effect=[[p],[p,p]]),patch.object(src,"_run",return_value=SimpleNamespace(returncode=0)):
             self.assertEqual(len(src.search("x")),1)
+    def test_count_parsing_unified(self):
+        """三处计数解析共用 num_utils：万/亿/逗号/非法值口径一致。"""
+        from collect.num_utils import parse_count, parse_count_int
+        from collect import comments
+        from collect.search_pipeline import SearchPipeline
+        from collect.sources.mediacrawler_source import _parse_count
+        # 浮点口径（热度排序）
+        self.assertEqual(parse_count("1.4万"), 14000.0)
+        self.assertEqual(parse_count("3亿"), 300000000.0)
+        self.assertEqual(parse_count("1,200"), 1200.0)
+        # 整数口径（评论筛选）与热度排序同源
+        self.assertEqual(parse_count_int("1.4万"), 14000)
+        self.assertEqual(comments._like_num("1.4万"), _parse_count("1.4万"))
+        self.assertEqual(SearchPipeline._count("2万"), 20000.0)
+        # 非法/空/布尔统一按 0，绝不抛错
+        for bad in ("", "abc", None, True, object()):
+            self.assertEqual(parse_count(bad), 0.0)
+            self.assertEqual(parse_count_int(bad), 0)
 
 if __name__ == "__main__":
     unittest.main()

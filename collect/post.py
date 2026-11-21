@@ -6,6 +6,8 @@
 
 from dataclasses import dataclass, field
 
+from collect.time_utils import normalize_time
+
 
 # MediaCrawler 平台码 → 规范化平台名（后续新源也沿用同一套规范名）。
 PLATFORM_NAME_MAP = {
@@ -71,7 +73,6 @@ class Post:
 
     def __post_init__(self):
         """统一时间并保留原始时间，避免不同源混排。"""
-        from collect.time_utils import normalize_time
         self.extra = dict(self.extra or {})
         if self.published_at:
             self.extra.setdefault("published_at_raw", self.published_at)

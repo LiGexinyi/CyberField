@@ -14,10 +14,13 @@
 
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor, wait
+import logging
+from concurrent.futures import ThreadPoolExecutor, wait, as_completed
 
 from collect import analysis, comments, llm, orchestrator, settings
+from collect.num_utils import parse_count
 from collect.sources.http_client import HttpSession
+from collect.sources.bilibili_source import MAX_SEARCH_PAGES
 
 _HOME_URL = "https://www.bilibili.com/"
 _SUG_URL = "https://s.search.bilibili.com/main/suggest"
@@ -33,6 +36,8 @@ _FAIL_RETRY_SECS = settings.SEARCH_FAIL_RETRY_SECS      # 失败结果冷却期
 _INFLIGHT_TIMEOUT = settings.SEARCH_INFLIGHT_TIMEOUT    # 等待并发搜索超时
 _COLLECT_WORKERS = settings.SEARCH_COLLECT_WORKERS      # 单次搜索并行采集并发数
 
+logger = logging.getLogger(__name__)
+
 
 class SearchPipeline:
     """一次搜索的生命周期管理（结果在内存，换词即弃）。
@@ -43,7 +48,10 @@ class SearchPipeline:
     """
 
     def __init__(self):
+        # 主线程保留一个默认会话，兼容既有测试与调用方的 patch 用法；
+        # 后台/HTTP 工作线程改用线程本地会话，避免共享 CookieJar 产生竞态。
         self._session = HttpSession()
+        self._thread_local = threading.local()
         # url -> {"comments": [...], "summary": str|None}（由后台线程填充）
         self._summary_cache: dict[str, dict] = {}
         self._cache_lock = threading.RLock()
@@ -55,20 +63,34 @@ class SearchPipeline:
         self._futures = set()
 
     # ------------------------------------------------------------ 模糊扩展
+    def _http_session(self) -> HttpSession:
+        """取当前线程可用的 HTTP 会话：主线程用默认会话，其他线程各自独立。"""
+        # CookieJar/urllib opener 非线程安全；后台增强线程若共享同一会话，
+        # 并发请求可能交叉读写 cookie。工作线程因此持有自己的会话实例。
+        if threading.current_thread() is threading.main_thread():
+            return self._session
+        session = getattr(self._thread_local, "session", None)
+        if session is None:
+            session = HttpSession()
+            self._thread_local.session = session
+        return session
+
     def fuzzy_expand(self, keyword: str) -> list[str]:
         """扩展相关搜索词：B站搜索建议（真实用户搜索）优先，LLM 补充。"""
         words = [keyword]
+        session = self._http_session()
         try:
-            self._session.get(_HOME_URL)  # 游客 cookie
-            sug = self._session.get_json(_SUG_URL,
-                                         params={"term": keyword},
-                                         referer=_HOME_URL)
+            session.get(_HOME_URL)  # 游客 cookie
+            sug = session.get_json(_SUG_URL,
+                                   params={"term": keyword},
+                                   referer=_HOME_URL)
             for t in ((sug.get("result") or {}).get("tag") or [])[:5]:
                 v = (t.get("value") or "").strip()
                 if v and v not in words:
                     words.append(v)
         except Exception:
-            pass
+            # 搜索建议是增强手段，失败静默降级为只用 LLM/原词；原因留日志。
+            logger.debug("B站搜索建议获取失败，跳过扩词来源", exc_info=True)
         for w in llm.expand_keywords(keyword):  # 无 Key 时原样返回
             if w and w not in words:
                 words.append(w)
@@ -83,7 +105,8 @@ class SearchPipeline:
         on_progress(step=..., collected=...) 每完成一个词由采集线程回调用以
         刷新进度。全部词都失败时结果标记 failed，缓存层按失败冷却期重试。
         """
-        from concurrent.futures import ThreadPoolExecutor
+        if getattr(on_progress, "progressive", False):
+            return self._round_search(keyword, on_progress)
         words = self.fuzzy_expand(keyword)
         if on_progress:
             on_progress(step=f"扩展为 {len(words)} 个词，开始并行采集…",
@@ -92,42 +115,87 @@ class SearchPipeline:
         ext_limit = max(15, main_limit // 2)     # 扩展词：B站补充
         pool = ThreadPoolExecutor(max_workers=_COLLECT_WORKERS)
         posts, errors = [], []
-        # 阶段1：主词多源深搜。先取回主词 → 发布 partial（第 1 页立即可读），
-        # 再补扩展词。这样前端能在搜索尚未完全结束时先显示第 1 页。
-        main_future = pool.submit(
-            orchestrator.collect, words[0], platforms=_PLATFORMS,
-            limit=main_limit, source_names=_SOURCES, save=False)
         try:
-            got, errs, _ = main_future.result()
-        except Exception as exc:   # 主词整体失败不影响扩展词
-            got, errs = [], [f"{words[0]}: 搜索失败 {exc}"]
-        posts.extend(got)
-        errors.extend(errs)
-        if on_progress:
-            on_progress(step=f"主词「{words[0]}」采集完成，已找到 {len(posts)} 条",
-                        collected=len(posts))
-        partial = self._assemble(keyword, words, posts, errors, partial=True)
-        self._publish_partial(keyword, partial)
-        # 阶段2：扩展词 B站补充。
-        ext_futures = []
-        for w in words[1:]:
-            ext_futures.append((w, pool.submit(
-                orchestrator.collect, w, platforms=("bili",),
-                limit=ext_limit, source_names=("bilibili_api",),
-                save=False)))
-        for i, (w, future) in enumerate(ext_futures, start=1):
+            # 阶段1：主词多源深搜。先取回主词 → 发布 partial（第 1 页立即可读），
+            # 再补扩展词。这样前端能在搜索尚未完全结束时先显示第 1 页。
+            main_future = pool.submit(
+                orchestrator.collect, words[0], platforms=_PLATFORMS,
+                limit=main_limit, source_names=_SOURCES, save=False)
             try:
-                got, errs, _ = future.result()
-            except Exception as exc:
-                got, errs = [], [f"{w}: 搜索失败 {exc}"]
+                got, errs, _ = main_future.result()
+            except Exception as exc:   # 主词整体失败不影响扩展词
+                got, errs = [], [f"{words[0]}: 搜索失败 {exc}"]
             posts.extend(got)
             errors.extend(errs)
             if on_progress:
-                step = (f"已完成 {i + 1}/{len(words)} 个词（扩展词「{w}」）"
-                        if i + 1 < len(words) else "采集完成，正在合并去重…")
-                on_progress(step=step, collected=len(posts))
-        pool.shutdown(wait=True)
+                on_progress(step=f"主词「{words[0]}」采集完成，已找到 {len(posts)} 条",
+                            collected=len(posts))
+            partial = self._assemble(keyword, words, posts, errors, partial=True)
+            self._publish_partial(keyword, partial)
+            # 阶段2：扩展词 B站补充。
+            ext_futures = []
+            for w in words[1:]:
+                ext_futures.append((w, pool.submit(
+                    orchestrator.collect, w, platforms=("bili",),
+                    limit=ext_limit, source_names=("bilibili_api",),
+                    save=False)))
+            for i, (w, future) in enumerate(ext_futures, start=1):
+                try:
+                    got, errs, _ = future.result()
+                except Exception as exc:
+                    got, errs = [], [f"{w}: 搜索失败 {exc}"]
+                posts.extend(got)
+                errors.extend(errs)
+                if on_progress:
+                    step = (f"已完成 {i + 1}/{len(words)} 个词（扩展词「{w}」）"
+                            if i + 1 < len(words) else "采集完成，正在合并去重…")
+                    on_progress(step=step, collected=len(posts))
+        finally:
+            # 中途异常也必须关闭采集线程池，避免线程泄漏。
+            pool.shutdown(wait=True)
         return self._assemble(keyword, words, posts, errors)
+
+    def _round_search(self, keyword, progress):
+        """先并行取各源首批，再按原词和建议词加深；每个来源完成即发布。"""
+        sources = dict(zip(_SOURCES, _PLATFORMS))
+        records, errors, words = {}, [], [keyword]
+        def collect_round(pool, word, limit, number):
+            progress(step=f"第 {number} 轮 · {word}", collected=len(records))
+            futures = {pool.submit(orchestrator.collect, word, platforms=(platform,),
+                                   limit=limit, source_names=(name,), save=False): name
+                       for name, platform in sources.items()}
+            for future in as_completed(futures):
+                name = futures[future]
+                try:
+                    batch, issues, _ = future.result()
+                except Exception:
+                    batch, issues = [], [f"{name} 搜索失败"]
+                if issues:
+                    errors.extend(issues)
+                    sources.pop(name, None)
+                for post in batch:
+                    records.setdefault((post.platform, post.url), post)
+                snapshot = self._assemble(keyword, words.copy(), list(records.values()), errors.copy(), partial=True)
+                snapshot["step"] = f"第 {number} 轮 · {word}"
+                # 首轮只发布社交帖子，避免最先返回的书影音条目占据首屏。
+                if number == 1:
+                    snapshot["posts"] = [p for p in snapshot["posts"]
+                                         if p.record_type != "catalog_item"]
+                self._publish_partial(keyword, snapshot)
+                progress(step=snapshot["step"], collected=len(records))
+        with ThreadPoolExecutor(max_workers=len(sources)) as pool:
+            collect_round(pool, keyword, 6, 1)
+            if sources and not self._closed:
+                collect_round(pool, keyword, 220, 2)
+            if sources and len(records) < 1000 and not self._closed:
+                for number, word in enumerate(self.fuzzy_expand(keyword)[1:], 3):
+                    if not sources or len(records) >= 1000 or self._closed:
+                        break
+                    words.append(word)
+                    collect_round(pool, word, settings.SEARCH_COLLECT_PER_SOURCE, number)
+        result = self._assemble(keyword, words, list(records.values()), errors)
+        result["progressive"] = True
+        return result
 
     def _assemble(self, keyword: str, words: list, posts: list,
                   errors: list, partial: bool = False) -> dict:
@@ -177,6 +245,11 @@ class SearchPipeline:
         if not posts:
             return []
         page_size = page_size or settings.DEFAULT_PAGE_SIZE
+        # 混合分页优先保留给社交帖子；书影音条目随后按自身热度排列。
+        catalog = [p for p in posts if p.record_type == "catalog_item"]
+        posts = [p for p in posts if p.record_type != "catalog_item"]
+        if not posts:
+            return sorted(catalog, key=SearchPipeline._hot_score, reverse=True)
         groups: dict[str, list] = {}
         for p in posts:
             groups.setdefault(p.platform, []).append(p)
@@ -202,7 +275,7 @@ class SearchPipeline:
                     if slot:
                         keep.append((pl, slot))
                 slots = keep
-        return result
+        return result + sorted(catalog, key=SearchPipeline._hot_score, reverse=True)
 
     @staticmethod
     def _chunk_pages(lst, pages):
@@ -215,29 +288,12 @@ class SearchPipeline:
 
     @staticmethod
     def _count(value) -> float:
-        """把互动数转成可比较数字（仅用于热度排序，不合并其他计数解析器）。
+        """把互动数转成可比较数字（仅用于热度排序）。
 
-        支持：int/float、含逗号字符串、'万'/'亿' 后缀；解析失败按 0 处理，
+        实现统一在 collect.num_utils.parse_count；解析失败按 0 处理，
         绝不抛错中断整次搜索。
         """
-        if isinstance(value, bool):
-            return 0.0
-        if isinstance(value, (int, float)):
-            return float(value)
-        if not isinstance(value, str):
-            return 0.0
-        text = value.strip().replace(",", "")
-        if not text:
-            return 0.0
-        multiplier = 1.0
-        if text.endswith("亿"):
-            multiplier, text = 100000000.0, text[:-1]
-        elif text.endswith("万"):
-            multiplier, text = 10000.0, text[:-1]
-        try:
-            return float(text) * multiplier
-        except ValueError:
-            return 0.0
+        return parse_count(value)
 
     @staticmethod
     def _hot_score(p) -> float:
@@ -254,12 +310,10 @@ class SearchPipeline:
                     return value
             return 0.0
 
-        return max(pick("play", "liked", "voteup", "attitudes_count",
-                        "reposts_count", "favorites", "coin",
-                        "rating_count", "rating"),
-                   pick("comment", "reply", "comments_count",
-                        "reviews_count", "discuss"),
-                   pick("video_review", "danmaku"))
+        return (pick("liked", "voteup", "attitudes_count", "favorites", "rating_count")
+                + 2 * pick("comment", "reply", "comments_count", "reviews_count", "discuss")
+                + 3 * pick("reposts_count", "share") + pick("video_review", "danmaku")
+                + 0.01 * pick("play"))
 
     # ------------------------------------------------------------ 缓存与并发
     def _servable(self, entry) -> bool:
@@ -295,7 +349,6 @@ class SearchPipeline:
             try:
                 result = self.run_search(keyword, size=size,
                                          on_progress=on_progress)
-                self.start_enrichment(keyword)
             except Exception as exc:
                 # 失败也要发布，否则等待者永久卡死；冷却期后会自动重试。
                 result = {"keyword": keyword, "expanded": [keyword],
@@ -309,6 +362,14 @@ class SearchPipeline:
                 condition = self._inflight.pop(keyword, None)
                 if condition is not None:
                     condition.notify_all()
+            # 增强任务必须在最终结果进入缓存后启动：start_enrichment 会读取
+            # get_posts(keyword)，若提前调用，扩展词帖子将拿不到评论/总结状态。
+            try:
+                if not result.get("progressive"):
+                    self.start_enrichment(keyword)
+            except RuntimeError:
+                # 服务关闭时拒绝新增强任务，不影响已发布搜索结果。
+                pass
             return result
         # 等待者：等待执行者发布结果。
         with self._cache_lock:
@@ -325,7 +386,7 @@ class SearchPipeline:
         return self._get_or_run(keyword, size)
 
     # ------------------------------------------------------------ 任务与进度
-    def start_search(self, keyword: str, size: int = 90) -> str:
+    def start_search(self, keyword: str, size: int = 90, progressive=False) -> str:
         """启动（或复用）一次搜索任务，立即返回状态；进度经 search_progress 轮询。
 
         done    结果已就绪（缓存新鲜可用），可直接取分页；
@@ -348,7 +409,7 @@ class SearchPipeline:
                                     "started": time.time()}
             self._bounded_tasks()
             try:
-                future = self._executor.submit(self._run_task, keyword, size)
+                future = self._executor.submit(self._run_task, keyword, size, progressive)
             except RuntimeError:   # 线程池已关闭的竞态
                 self._tasks[keyword].update(status="failed", error="服务已关闭")
                 return "failed"
@@ -356,7 +417,90 @@ class SearchPipeline:
             future.add_done_callback(self._forget_future)
         return "running"
 
-    def _run_task(self, keyword: str, size: int) -> None:
+    def continue_search(self, keyword: str, related_word: str = "") -> str:
+        """从已有结果启动补搜，即使结果超过普通搜索的缓存时限。"""
+        with self._cache_lock:
+            if self._closed:
+                return "failed"
+            task = self._tasks.get(keyword, {})
+            if task.get("status") == "running" or keyword in self._inflight:
+                return "running"
+            entry = self._cache.get(keyword)
+            if entry is None:
+                return "idle"
+            # 延长当前快照的有效期，让等待补搜时仍可浏览旧结果。
+            entry["created"] = time.time()
+            self._tasks[keyword] = {
+                "status": "running", "continuation": True, "step": "正在寻找更多内容…",
+                "started": time.time(), "collected": len(entry["posts"]),
+            }
+            self._bounded_tasks()
+            try:
+                future = self._executor.submit(self._continue_task, keyword, related_word, entry)
+            except RuntimeError:
+                self._tasks[keyword].update(status="failed", error="服务已关闭")
+                return "failed"
+            self._futures.add(future)
+            future.add_done_callback(self._forget_future)
+            return "running"
+
+    def _continue_task(self, keyword, related_word, entry):
+        """扫描下一段公开页或补查相关词，按平台和链接合并。"""
+        previous = entry["posts"]
+        words = list(entry.get("expanded") or [keyword])
+        next_page = entry.get("bili_next_page", 1)
+        extra_posts, errors = [], []
+        try:
+            if not related_word and next_page <= MAX_SEARCH_PAGES:
+                batch, issues, _ = orchestrator.collect(
+                    keyword, platforms=("bili",), source_names=("bilibili_api",),
+                    limit=400, save=False,
+                    source_kwargs={"bilibili_api": {"start_page": next_page, "page_window": 8}},
+                )
+                extra_posts.extend(batch)
+                errors.extend(issues)
+                if not issues:
+                    next_page = next_page + 8 if batch else MAX_SEARCH_PAGES + 1
+
+            # 有新建议时才扩词。平台拒绝返回原词结果时保留游标，等下一次手动重试。
+            if not related_word and not errors and not self._closed:
+                searched = {word.casefold() for word in words}
+                related_word = next((word for word in self.fuzzy_expand(keyword)
+                                     if word.casefold() not in searched), "")
+            if related_word and not self._closed:
+                batch, issues, _ = orchestrator.collect(
+                    related_word, platforms=_PLATFORMS, source_names=_SOURCES,
+                    limit=settings.SEARCH_COLLECT_PER_SOURCE, save=False,
+                )
+                extra_posts.extend(batch)
+                errors.extend(issues)
+                if related_word not in words:
+                    words.append(related_word)
+        except Exception:
+            logger.exception("继续搜索失败")
+            errors.append("继续搜索暂不可用")
+
+        result = self._assemble(keyword, words, [*previous, *extra_posts], errors)
+        count = len(result["posts"])
+        added = count - len(previous)
+        if added:
+            message = f"本次新增 {added} 条，累计 {count} 条。"
+        elif errors:
+            message = "本次没有新增，部分来源暂不可用。可以稍后重试或换个补搜词。"
+        elif next_page > MAX_SEARCH_PAGES:
+            message = "没有发现新结果。可以输入其他相关词继续补搜。"
+        else:
+            message = "这批结果与已有内容重复。可以继续查下一批，或输入相关词。"
+
+        with self._cache_lock:
+            if self._closed:
+                return
+            result.update(progressive=True, created=time.time(), bili_next_page=next_page)
+            self._cache[keyword] = result
+            self._bounded_evict()
+            self._tasks[keyword].update(status="done", total=count, added=added, message=message)
+
+    def _run_task(self, keyword: str, size: int, progressive=False) -> None:
         """后台执行搜索并回写进度，结束必须写出终态。"""
         def on_progress(**updates):
             """由采集线程回调，仅刷新任务记录，不参与缓存发布。"""
@@ -364,6 +508,7 @@ class SearchPipeline:
                 task = self._tasks.get(keyword)
                 if task is not None:
                     task.update(**updates)
+        on_progress.progressive = progressive
         try:
             result = self._get_or_run(keyword, size, on_progress=on_progress)
         except Exception as exc:
@@ -384,11 +529,13 @@ class SearchPipeline:
         with self._cache_lock:
             entry = self._cache.get(keyword)
             task = self._tasks.get(keyword)
+        if task and task.get("continuation"):
+            return {"task": keyword, **task}
         if entry is not None and self._servable(entry):
             if entry.get("partial"):
                 # 主词阶段快照已就绪：第 1 页可先取，但任务仍标记在途。
                 return {"task": keyword, "status": "running",
-                        "step": "主词采集完成，正在补扩展词…",
+                        "step": (task or {}).get("step") or entry.get("step", "继续搜索…"),
                         "collected": len(entry.get("posts") or []),
                         "errors": entry.get("errors") or []}
             return {"task": keyword, "status": "done",
@@ -414,12 +561,12 @@ class SearchPipeline:
             self._tasks.pop(oldest, None)
 
     # ------------------------------------------------------------ 评论+总结
-    def start_enrichment(self, keyword: str) -> None:
+    def start_enrichment(self, keyword: str, posts=None) -> None:
         """提交增强任务；排队不代表完成，关闭后拒绝新任务。"""
         with self._cache_lock:
             if self._closed:
                 raise RuntimeError("搜索服务已关闭")
-        for post in self.get_posts(keyword):
+        for post in (self.get_posts(keyword) if posts is None else posts):
             with self._cache_lock:
                 if self._closed:
                     raise RuntimeError("搜索服务已关闭")
@@ -454,7 +601,7 @@ class SearchPipeline:
             with self._cache_lock:
                 if self._closed:
                     return
-            if not llm.available():
+            if not settings.ENABLE_AI_SUMMARY or not llm.available():
                 status = "skipped"
             else:
                 summary = llm.summarize_post(p.title, p.text, texts, platform=p.platform)
@@ -462,7 +609,8 @@ class SearchPipeline:
                 if not summary:
                     error = "总结请求失败或未返回内容"
         except Exception:
-            # 不把外部异常原文发送前端，避免其中夹带请求凭据。
+            # 不把外部异常原文发送前端，避免其中夹带请求凭据；细节进日志。
+            logger.debug("评论/总结任务执行失败（url=%s）", p.url, exc_info=True)
             status, error = "failed", "评论或总结任务执行失败"
         with self._cache_lock:
             if not self._closed:
@@ -488,13 +636,14 @@ class SearchPipeline:
         return not pending
 
     def fetch_comments(self, p) -> list[str]:
-        """兼容现有入口，委托评论模块并复用当前HTTP会话。"""
-        return comments.fetch_comments(p, self._session, max_comments=_MAX_COMMENTS)
+        """兼容现有入口，委托评论模块并复用当前线程的HTTP会话。"""
+        return comments.fetch_comments(p, self._http_session(), max_comments=_MAX_COMMENTS)
 
     # ------------------------------------------------------------ 状态读取
     def get_posts(self, keyword: str) -> list:
         """返回关键词对应的帖子列表副本，不暴露缓存容器。"""
-        entry = self._cache.get(keyword) or {}
+        with self._cache_lock:
+            entry = self._cache.get(keyword) or {}
         return list(entry.get("posts") or [])
 
     def result_details(self, url: str) -> dict:
@@ -506,12 +655,21 @@ class SearchPipeline:
                     "summary_status": state.get("status", "idle"),
                     "summary_error": state.get("error")}
 
-    def search_page(self, keyword: str, page: int = 1, size: int = settings.DEFAULT_PAGE_SIZE) -> dict:
+    def search_page(self, keyword: str, page: int = 1, size: int = settings.DEFAULT_PAGE_SIZE, platforms=None, snapshot=False) -> dict:
         """获取分页结果；page/size由入口校验，首次搜索才启动增强任务。"""
-        cache = self._get_or_run(keyword, size * 3)
+        if snapshot:
+            # 翻页时仅取快照，避免缓存过期后意外覆盖本次累积的搜索结果。
+            with self._cache_lock:
+                cache = self._cache.get(keyword) or {}
+        else:
+            cache = self._get_or_run(keyword, size * 3)
         posts = cache.get("posts") or []
+        if platforms is not None:
+            posts = self._balanced_order([p for p in posts if p.platform in platforms], size)
         total = len(posts)
         start = (page - 1) * size
+        if cache.get("progressive") or cache.get("step"):
+            self.start_enrichment(keyword, posts[start:start + size])
         # 返回分页快照，HTTP层只需要序列化Post，不再了解内部缓存。
         return {"keyword": keyword,
                 "expanded": list(cache.get("expanded") or [keyword]),
@@ -520,12 +678,17 @@ class SearchPipeline:
                 "pages": max(1, (total + size - 1) // size),
                 "errors": list(cache.get("errors") or [])}
 
-    def analysis_for(self, keyword: str) -> dict:
+    def analysis_for(self, keyword: str, with_text=False) -> dict:
         """根据已搜索样本返回统计，未有样本时保留原错误提示。"""
-        posts = self.get_posts(keyword)
+        posts = list(analysis.combined_posts(self.get_posts(keyword), keyword, include_catalog=with_text))
         if not posts:
             return {"error": "请先搜索「" + keyword + "」"}
-        return self.build_analysis(posts)
+        result = analysis.build_analysis([p for p in posts if p.record_type == "post"], keyword)
+        if with_text:
+            # 条目简介仅作文本资料，不能把上映日期计为发帖时间。
+            result["documents"] = [{"platform": p.platform, "text": " ".join(dict.fromkeys(
+                filter(None, (p.title, p.text))))} for p in posts]
+        return result
 
     def summary_state(self, keyword: str) -> list[dict]:
         """返回本次搜索各结果的评论/总结状态（前端轮询）。"""

@@ -14,6 +14,7 @@
 SourceUnavailable，由调度器跳过该源，不影响其他源。
 """
 
+import logging
 import re
 import time
 from collect.time_utils import normalize_time
@@ -21,6 +22,8 @@ from collect.time_utils import normalize_time
 from collect.post import Post, normalize_platform
 from collect.sources.base_source import BaseSource, SourceUnavailable
 from collect.sources.http_client import HttpSession
+
+logger = logging.getLogger(__name__)
 
 # 主页：先访问拿 Cookie；搜索接口：按内容类型搜索。
 _HOME_URL = "https://www.bilibili.com/"
@@ -32,7 +35,8 @@ _TAG_RE = re.compile(r"<[^>]+>")
 _OUTLINE_RE = re.compile(r"^\s*\d{1,2}:\d{2}(?::\d{2})?\s+")
 # 深翻页：每页约 20 条，上限 50 页 ≈ 1000 条/类型（实测深翻稳定，
 # 用页间延迟控风控；触发 -412 时早页重试一次、晚页降级保留已拿数据）。
-_MAX_PAGES = 50
+MAX_SEARCH_PAGES = 50
+_MAX_PAGES = MAX_SEARCH_PAGES
 _PAGE_DELAY = 0.3     # 页间延迟，降低 -412 风控概率
 _RETRY_DELAY = 3.0    # 早页遇风控时的重试间隔
 # 一次搜索覆盖的内容形态：视频 + 专栏文章。
@@ -43,7 +47,11 @@ class BilibiliApiSource(BaseSource):
     name = "bilibili_api"
     platforms = ["bilibili"]
 
-    def __init__(self, detail_limit: int = 0, **kwargs):
+    def __init__(self, detail_limit: int = 0, start_page: int = 1,
+                 page_window: int | None = None, **kwargs):
+        """可指定页窗口，供继续搜索从更深页获取结果。"""
+        self.start_page = start_page
+        self.page_window = page_window
         # 每个实例独立 Cookie 会话（模拟一次浏览器访问）。
         self._session = HttpSession()
         # detail_limit > 0 时对前 N 条视频抓详情接口，补完整简介/时序章节概览；
@@ -77,13 +85,34 @@ class BilibiliApiSource(BaseSource):
             raise SourceUnavailable(f"B站接口请求失败：{exc}") from exc
         return posts[:target]
 
+    def research_videos(self, keyword: str) -> list[Post]:
+        """查询公开视频，为相关候选补点赞、投币和收藏等互动数据。"""
+        from concurrent.futures import ThreadPoolExecutor
+        from collect.num_utils import parse_count
+        self._session = HttpSession(timeout=6)
+        self._session.get(_HOME_URL)
+        candidates = self._search_pages(keyword, "video", 20)
+        candidates = [p for p in candidates if p.extra.get("bvid") and
+                      keyword.casefold() in (p.title + " " + p.text).casefold()]
+        candidates.sort(key=lambda p: parse_count(p.extra.get("favorites")) * 4
+                        + parse_count(p.extra.get("play")) * .01, reverse=True)
+        def enrich(post):
+            """每个 worker 使用独立会话，避免跨线程共享 Cookie。"""
+            source = BilibiliApiSource()
+            source._session = HttpSession(timeout=5)
+            return source._enrich_details([post])[0]
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            return list(pool.map(enrich, candidates[:12]))
+
     # ---------------------------------------------------------------- 内部实现
     def _search_pages(self, keyword: str, search_type: str,
                       limit: int) -> list[Post]:
         """按内容类型深翻页，返回该类型的 Post 列表（≤ limit）。"""
         posts: list[Post] = []
-        page = 1
-        while len(posts) < limit and page <= _MAX_PAGES:
+        page = self.start_page
+        end = _MAX_PAGES if self.page_window is None else min(
+            _MAX_PAGES, page + self.page_window - 1)
+        while len(posts) < limit and page <= end:
             try:
                 data = self._session.get_json(
                     _SEARCH_API,
@@ -92,11 +121,14 @@ class BilibiliApiSource(BaseSource):
                     referer=_HOME_URL,
                 )
             except Exception as exc:
-                if posts:
+                if posts and self.page_window is None:
                     break  # 已有一部分结果，降级返回
                 raise SourceUnavailable(f"B站接口请求失败：{exc}") from exc
             if data.get("code") != 0:
                 # 风控(-412)或接口异常：早页重试一次，晚页保留已拿数据。
+                if self.page_window is not None:
+                    # 手动补搜碰到平台拒绝时停在当前窗口，避免跳过未知结果。
+                    raise SourceUnavailable(f"B站搜索暂不可用（{data.get('code')}）")
                 if posts or page > 5:
                     break
                 time.sleep(_RETRY_DELAY)
@@ -117,7 +149,7 @@ class BilibiliApiSource(BaseSource):
             if not results:
                 break  # 没更多结果了
             page += 1
-            if len(posts) < limit and page <= _MAX_PAGES:
+            if len(posts) < limit and page <= end:
                 time.sleep(_PAGE_DELAY)
         return posts
 
@@ -150,12 +182,12 @@ class BilibiliApiSource(BaseSource):
                 stat = d.get("stat") or {}
                 for api_key, extra_key in (("view", "play"), ("danmaku", "danmaku"),
                                            ("favorite", "favorites"), ("like", "like"),
-                                           ("reply", "reply")):
+                                           ("reply", "reply"), ("coin", "coin"), ("share", "share")):
                     if stat.get(api_key) is not None and not extra.get(extra_key):
                         extra[extra_key] = stat[api_key]
                 p.extra = extra
             except Exception:
-                pass  # 单条详情失败不影响整体
+                logger.debug("B站单条详情获取失败，跳过该条增强", exc_info=True)
             enriched.append(p)
         return enriched
 

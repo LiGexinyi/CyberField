@@ -10,8 +10,11 @@
     - 任何失败（下载 / 识别）都降级返回空列表，不中断采集。
 """
 
+import logging
 import threading
 import urllib.request
+
+logger = logging.getLogger(__name__)
 
 # 图片防盗链需要的浏览器头。
 _HEADERS = {
@@ -53,10 +56,12 @@ def ocr_bytes(data: bytes) -> list[str]:
     try:
         engine = _get_engine()
     except Exception:
+        logger.debug("OCR 引擎不可用（未安装 rapidocr？），按空结果降级", exc_info=True)
         return []
     try:
         result, _ = engine(data)
     except Exception:
+        logger.debug("OCR 识别失败", exc_info=True)
         return []
     if not result:
         return []
@@ -73,6 +78,7 @@ def ocr_image_url(url: str) -> list[str]:
         data = download_image(url)
         lines = ocr_bytes(data)
     except Exception:
+        logger.debug("图片下载/识别失败：%s", url[:80], exc_info=True)
         lines = []
     with _cache_lock:
         _cache[url] = lines

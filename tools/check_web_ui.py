@@ -37,6 +37,7 @@ def main():
     calls, errors = [], []
     mode = {"summary": "running"}
     progress_polls = {"count": 0}
+    extra = {"batches": 0}
     accounts = [
         {"platform": "xhs", "label": "小红书", "state": "no_profile", "state_label": "未登录", "login_supported": True},
         {"platform": "bili", "label": "B站", "state": "logged_in", "state_label": "已登录", "nickname": "模拟用户", "login_supported": True},
@@ -58,9 +59,15 @@ def main():
             # prog 词走“任务在途 → 轮询进度 → 完成”路径；其余词结果已就绪。
             payload = {"ok": True, "task": word,
                        "status": "running" if word == "prog" else "done"}
+        elif path == "/api/search/continue":
+            extra["batches"] += 1
+            payload = {"ok": True, "status": "running"}
         elif path == "/api/search/progress":
             word = (parse_qs(urlsplit(request.url).query).get("task") or [""])[0]
-            if word == "prog":
+            if word == "topic" and extra["batches"]:
+                payload = {"task": word, "status": "done", "total": 2 + extra["batches"],
+                           "added": 1, "message": "本次新增 1 条"}
+            elif word == "prog":
                 progress_polls["count"] += 1
                 if progress_polls["count"] < 3:
                     payload = {"task": word, "status": "running",
@@ -75,12 +82,16 @@ def main():
                 status, payload = 500, {"error": "mock failure"}
             else:
                 row = {"platform": "bilibili", "title": f"资料-{word}", "text": "sample", "url": f"https://example.invalid/{number}", "author": "模拟作者", "published_at": "2026-11-13 12:00:00", "summary": None, "summary_status": "running", "comments": [], "extra": {"play": 10}}
-                payload = {"keyword": word, "rows": [] if word == "empty" else [row], "total": 0 if word == "empty" else 2, "page": number, "pages": 1 if word == "empty" else 2, "expanded": [word], "errors": []}
+                payload = {"keyword": word, "rows": [] if word == "empty" else [row], "total": 0 if word == "empty" else 2 + extra["batches"], "page": number, "pages": 1 if word == "empty" else 2 + extra["batches"], "expanded": [word], "errors": []}
         elif path == "/api/summaries":
             done = mode["summary"] != "running"
-            payload = {"states": [{"url": f"https://example.invalid/{i}", "done": done, "status": mode["summary"], "summary": "模拟摘要" if mode["summary"] == "completed" else None, "comments": [], "error": None} for i in (1, 2)]}
+            payload = {"states": [{"url": f"https://example.invalid/{i}", "done": done, "status": mode["summary"], "summary": "模拟摘要" if mode["summary"] == "completed" else None, "comments": ["模拟评论"] if done else [], "error": None} for i in (1, 2)]}
         elif path == "/api/analysis":
-            payload = {"timeline": [["2026-11-13", 2]], "topics": [{"word": "模拟话题", "count": 2}], "groups": [{"label": "模拟作者", "count": 2}]}
+            payload = {"timeline": [["2026-11-13", 2]], "topics": [{"word": "模拟话题", "count": 2}],
+                       "documents": [], "total": 2, "dated": 2, "tagged": 2}
+        elif path == "/api/topic-interpretation":
+            payload = {"text": "模拟梗解读 [1]", "mode": "模拟检索", "sources": [
+                {"title": "模拟作品", "url": "https://example.invalid/work", "metrics": {"点赞": 20}}]}
         elif path == "/api/login":
             payload = {"status": "starting"} if request.method == "POST" else {"status": "qr_ready", "qr": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aN1sAAAAASUVORK5CYII="}
         elif path == "/api/login/cancel":
@@ -124,19 +135,35 @@ def main():
             page.locator("#q").fill("topic")
             page.locator("#q").press("Enter")
             expect(page.locator(".record")).to_have_count(1)
-            expect(page.locator(".summary")).to_contain_text("总结生成中")
             expect(page.locator(".row-foot a")).to_have_attribute("href", "https://example.invalid/1")
             mode["summary"] = "completed"
-            expect(page.locator(".summary")).to_have_text("模拟摘要", timeout=6000)
+            expect(page.locator(".comments")).to_contain_text("模拟评论", timeout=6000)
             page.get_by_role("button", name="下一页 →", exact=True).click()
             expect(page.locator(".page-num")).to_have_text("第 2 / 2 页")
             expect(page.locator(".row-foot a")).to_have_attribute("href", "https://example.invalid/2")
+            page.locator("#more-button").click()
+            expect(page.locator(".page-num")).to_have_text("第 2 / 3 页")
+            expect(page.locator("#more-note")).to_contain_text("本次新增 1 条")
+            page.locator("#more-word").fill("相关梗")
+            page.locator("#more-button").click()
+            expect(page.locator(".page-num")).to_have_text("第 2 / 4 页")
+            assert any(path == "/api/search/continue" and body.get("related_word") == "相关梗"
+                       for _, path, body in calls)
             page.locator("#tab-analysis").click()
-            expect(page.locator(".bar")).to_have_count(1)
+            expect(page.locator("#chart canvas")).to_be_visible()
             page.locator('input[value="topics"]').check()
-            expect(page.locator(".wordcloud")).to_contain_text("模拟话题")
-            page.locator('input[value="groups"]').check()
-            expect(page.locator("#chart")).to_contain_text("模拟作者")
+            expect(page.locator(".term-list")).to_contain_text("模拟话题")
+            expect(page.locator(".ai-settings")).to_have_count(0)
+            page.locator('input[value="ai"]').check()
+            expect(page.locator("#chart")).to_be_hidden()
+            page.get_by_text("模型", exact=True).locator("input").fill("demo-model")
+            page.get_by_text("API Key", exact=True).locator("input").fill("fixture")
+            page.get_by_role("button", name="搜索并解读这个梗").click()
+            expect(page.locator("#ai-analysis")).to_contain_text("模拟梗解读 [1]")
+            expect(page.get_by_role("link", name="模拟作品")).to_have_attribute("href", "https://example.invalid/work")
+            page.locator('input[value="topics"]').check()
+            page.locator('input[value="ai"]').check()
+            expect(page.locator("#ai-analysis")).to_contain_text("模拟梗解读 [1]")
             page.locator("#user-btn").click()
             expect(page.locator(".acct-card")).to_have_count(4)
             page.locator('[data-plat="xhs"]').get_by_role("button", name="登录", exact=True).click()
@@ -155,7 +182,7 @@ def main():
             expect(page.locator("#list")).to_contain_text("没有匹配结果")
             page.locator("#q").fill("error")
             page.locator("#go").click()
-            expect(page.locator("#meta")).to_contain_text("搜索失败")
+            expect(page.locator("#more-note")).to_contain_text("结果读取失败")
             # 进度验收：prog 词任务在途时展示真实步骤与条数，完成后出结果。
             page.locator("#q").fill("prog")
             page.locator("#go").click()
@@ -175,7 +202,7 @@ def main():
             assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
             assert not errors, errors
             browser.close()
-        print("PASS: ES modules, search+progress, pagination, summary polling, analysis views, account panel, QR/cancel, verify, logout, empty/error feedback, mobile width; no JS errors.")
+        print("PASS: ES modules, search+progress, pagination, comment polling, continuation, analysis and AI views, account panel, QR/cancel, verify, logout, empty/error feedback, mobile width; no JS errors.")
     finally:
         server.shutdown()
         server.server_close()

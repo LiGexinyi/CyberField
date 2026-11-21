@@ -9,9 +9,12 @@
 """
 
 import json
+import logging
 import os
 import urllib.request
 from collect import settings
+
+logger = logging.getLogger(__name__)
 
 _DEFAULT_BASE = settings.DEFAULT_LLM_BASE
 _DEFAULT_MODEL = settings.DEFAULT_LLM_MODEL
@@ -62,6 +65,8 @@ def chat(messages: list[dict], max_tokens: int = 500,
             return None
         return content.strip() or None
     except Exception:
+        # 调用方按 None 降级；失败原因（超时/4xx/解析）留日志便于排查。
+        logger.debug("LLM 请求失败，按无总结降级", exc_info=True)
         return None
 
 

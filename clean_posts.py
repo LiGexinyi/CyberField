@@ -50,13 +50,24 @@ def clean_dataframe(df):
 
     # ---- 第 2 步：按 platform + source_url 去重 ----
     before_dedup = len(df)
-    # subset：只依据这两列判断重复；keep="first"：重复时保留第一次出现的记录。
-    df = df.drop_duplicates(subset=["platform", "source_url"], keep="first")
+    # source_url 统一按字符串处理：空 URL 不是有效去重键，不能把多条合法记录
+    # 因“都为空”而误删；因此只对非空 URL 参与 subset 去重。
+    df["source_url"] = df["source_url"].fillna("").astype(str).str.strip()
+    has_url = df["source_url"] != ""
+    duplicated = df.duplicated(subset=["platform", "source_url"], keep="first")
+    df = df[~(duplicated & has_url)]
     dup_removed = before_dedup - len(df)  # 去重前行数 - 去重后行数 = 去重数量
 
     # ---- 第 3 步：按发布时间升序排序 ----
     # 先把"看起来像时间"的文字转成真正的日期时间类型，才能正确比较先后。
-    df["published_at"] = pd.to_datetime(df["published_at"])
+    # errors="coerce"：非法时间转为 NaT，随后统一拒绝，避免输出无法入库的 CSV。
+    parsed_time = pd.to_datetime(df["published_at"], errors="coerce")
+    if parsed_time.isna().any():
+        bad_values = df.loc[parsed_time.isna(), "published_at"].astype(str).head(3).tolist()
+        raise ValueError(
+            "published_at 存在无法解析的时间：" + "、".join(bad_values)
+        )
+    df["published_at"] = parsed_time
     # sort_values：按该列升序排序；reset_index 让行号重新从 0 连续编号。
     df = df.sort_values("published_at").reset_index(drop=True)
 
