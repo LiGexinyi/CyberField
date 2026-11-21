@@ -47,7 +47,12 @@ class SearchPipeline:
     任务未完成时会阻塞等待同一份缓存结果。
     """
 
-    def __init__(self):
+    def __init__(self, public=False):
+        """访客进程只使用免登录数据源，限制并发采集任务数。"""
+        self.public = public
+        source_pairs = [(source, platform) for source, platform in zip(_SOURCES, _PLATFORMS)
+                        if not public or platform in ("bili", "douban", "wb")]
+        self._sources, self._platforms = zip(*source_pairs)
         # 主线程保留一个默认会话，兼容既有测试与调用方的 patch 用法；
         # 后台/HTTP 工作线程改用线程本地会话，避免共享 CookieJar 产生竞态。
         self._session = HttpSession()
@@ -91,7 +96,7 @@ class SearchPipeline:
         except Exception:
             # 搜索建议是增强手段，失败静默降级为只用 LLM/原词；原因留日志。
             logger.debug("B站搜索建议获取失败，跳过扩词来源", exc_info=True)
-        for w in llm.expand_keywords(keyword):  # 无 Key 时原样返回
+        for w in (() if self.public else llm.expand_keywords(keyword)):  # 无 Key 时原样返回
             if w and w not in words:
                 words.append(w)
         return words[:_MAX_WORDS]
@@ -119,8 +124,8 @@ class SearchPipeline:
             # 阶段1：主词多源深搜。先取回主词 → 发布 partial（第 1 页立即可读），
             # 再补扩展词。这样前端能在搜索尚未完全结束时先显示第 1 页。
             main_future = pool.submit(
-                orchestrator.collect, words[0], platforms=_PLATFORMS,
-                limit=main_limit, source_names=_SOURCES, save=False)
+                orchestrator.collect, words[0], platforms=self._platforms,
+                limit=main_limit, source_names=self._sources, save=False)
             try:
                 got, errs, _ = main_future.result()
             except Exception as exc:   # 主词整体失败不影响扩展词
@@ -157,7 +162,7 @@ class SearchPipeline:
 
     def _round_search(self, keyword, progress):
         """先并行取各源首批，再按原词和建议词加深；每个来源完成即发布。"""
-        sources = dict(zip(_SOURCES, _PLATFORMS))
+        sources = dict(zip(self._sources, self._platforms))
         records, errors, words = {}, [], [keyword]
         def collect_round(pool, word, limit, number):
             progress(step=f"第 {number} 轮 · {word}", collected=len(records))
@@ -365,7 +370,7 @@ class SearchPipeline:
             # 增强任务必须在最终结果进入缓存后启动：start_enrichment 会读取
             # get_posts(keyword)，若提前调用，扩展词帖子将拿不到评论/总结状态。
             try:
-                if not result.get("progressive"):
+                if not self.public and not result.get("progressive"):
                     self.start_enrichment(keyword)
             except RuntimeError:
                 # 服务关闭时拒绝新增强任务，不影响已发布搜索结果。
@@ -404,6 +409,9 @@ class SearchPipeline:
                 return "running"
             if self._closed:
                 return "failed"
+            # 多访客请求共享同一进程，拒绝堆积过多新采集。
+            if self.public and sum(t.get("status") == "running" for t in self._tasks.values()) >= 2:
+                return "busy"
             self._tasks[keyword] = {"status": "running", "step": "准备搜索…",
                                     "collected": 0, "errors": [],
                                     "started": time.time()}
@@ -430,6 +438,9 @@ class SearchPipeline:
                 return "idle"
             # 延长当前快照的有效期，让等待补搜时仍可浏览旧结果。
             entry["created"] = time.time()
+            # 多访客请求共享同一进程，拒绝堆积过多新采集。
+            if self.public and sum(t.get("status") == "running" for t in self._tasks.values()) >= 2:
+                return "busy"
             self._tasks[keyword] = {
                 "status": "running", "continuation": True, "step": "正在寻找更多内容…",
                 "started": time.time(), "collected": len(entry["posts"]),
@@ -469,7 +480,7 @@ class SearchPipeline:
                                      if word.casefold() not in searched), "")
             if related_word and not self._closed:
                 batch, issues, _ = orchestrator.collect(
-                    related_word, platforms=_PLATFORMS, source_names=_SOURCES,
+                    related_word, platforms=self._platforms, source_names=self._sources,
                     limit=settings.SEARCH_COLLECT_PER_SOURCE, save=False,
                 )
                 extra_posts.extend(batch)
@@ -668,7 +679,7 @@ class SearchPipeline:
             posts = self._balanced_order([p for p in posts if p.platform in platforms], size)
         total = len(posts)
         start = (page - 1) * size
-        if cache.get("progressive") or cache.get("step"):
+        if not self.public and (cache.get("progressive") or cache.get("step")):
             self.start_enrichment(keyword, posts[start:start + size])
         # 返回分页快照，HTTP层只需要序列化Post，不再了解内部缓存。
         return {"keyword": keyword,
@@ -680,7 +691,8 @@ class SearchPipeline:
 
     def analysis_for(self, keyword: str, with_text=False) -> dict:
         """根据已搜索样本返回统计，未有样本时保留原错误提示。"""
-        posts = list(analysis.combined_posts(self.get_posts(keyword), keyword, include_catalog=with_text))
+        posts = list(analysis.combined_posts(self.get_posts(keyword), keyword,
+                                             include_catalog=with_text, include_archive=not self.public))
         if not posts:
             return {"error": "请先搜索「" + keyword + "」"}
         result = analysis.build_analysis([p for p in posts if p.record_type == "post"], keyword)

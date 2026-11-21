@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>CyberField · 搜索</title><link rel="stylesheet" href="/style.css"></head>
 <body>
-<header><span class="brand">CyberField</span><button id="user-btn" class="user" title="平台账号"><span class="avatar">?</span><span id="user-name">访客</span><span class="caret">▾</span></button></header>
+<header><span class="brand">CyberField</span><button id="user-btn" class="user local-only" title="平台账号"><span class="avatar">?</span><span id="user-name">访客</span><span class="caret">▾</span></button></header>
 <div class="search-bar"><input id="q" placeholder="输入搜索词，自动模糊搜索 B站 / 豆瓣 / 微博…" autocomplete="off"><button id="go">搜索</button></div>
 <div class="layout">
 <aside class="side">
@@ -9,12 +9,12 @@
 <section id="analyze-nav" class="analyze-nav" hidden><h2>数据分析</h2>
 <label><input type="radio" name="dim" value="timeline" checked>时间热度</label>
 <label><input type="radio" name="dim" value="topics">共现话题</label>
-<label><input type="radio" name="dim" value="ai">AI 分析</label>
+<label class="local-only"><input type="radio" name="dim" value="ai">AI 分析</label>
 </section>
 </aside>
 <main>
 <nav class="tabs"><button id="tab-data" class="tab active">详细数据</button><button id="tab-analysis" class="tab">数据分析</button></nav>
-<section id="data-view"><fieldset id="filters"><legend>显示平台</legend><label><input type="checkbox" checked value="bilibili">B站</label> <label><input type="checkbox" checked value="xiaohongshu">小红书</label> <label><input type="checkbox" checked value="zhihu">知乎</label> <label><input type="checkbox" checked value="douban">豆瓣</label> <label><input type="checkbox" checked value="weibo">微博</label> </fieldset><p id="meta" class="meta-line"></p>
+<section id="data-view"><fieldset id="filters"><legend>显示平台</legend><label><input type="checkbox" checked value="bilibili">B站</label> <label class="local-only"><input type="checkbox" checked value="xiaohongshu">小红书</label> <label class="local-only"><input type="checkbox" checked value="zhihu">知乎</label> <label><input type="checkbox" checked value="douban">豆瓣</label> <label><input type="checkbox" checked value="weibo">微博</label> </fieldset><p id="meta" class="meta-line"></p>
 <form id="more-search" class="more-search" hidden>
   <button id="more-button" type="submit">继续搜索</button>
   <input id="more-word" type="search" maxlength="100" aria-label="可选补搜词" placeholder="可选 · 相关词">

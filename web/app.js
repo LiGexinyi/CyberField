@@ -104,7 +104,7 @@ async function loadPage(page,background=false){
   S.page=page;S.pages=d.pages;S.total=d.total;S.expanded=d.expanded;S.errors=d.errors;
   renderMeta();if(!background||old.length<PAGE_SIZE)renderList();renderPager();
   $('analyze-nav').hidden=false;
-  if(!pollTimer)pollTimer=setInterval(pollSummaries,2000);
+  if(!publicMode&&!pollTimer)pollTimer=setInterval(pollSummaries,2000);
 }
 
 async function pollSummaries(){
@@ -177,7 +177,8 @@ function switchView(v){S.view=v;$('tab-data').classList.toggle('active',v==='dat
 
 // 显式传递状态读取方式；账号模块独立初始化。
 const {showAnalysis}=createAnalysis(()=>S);
-const accounts=initAccounts();
+const publicMode=document.body.dataset.mode==='public';
+const accounts=publicMode?null:initAccounts();
 $('go').onclick=search;
 $('q').addEventListener('keydown',e=>{if(e.key==='Enter')search();});
 $('tab-data').onclick=()=>switchView('data');
@@ -190,5 +191,5 @@ window.addEventListener('pagehide',(event)=>{
   if(event.persisted)return;
   if(pollTimer)clearInterval(pollTimer);
   hideProgress();
-  accounts.destroy();
+  accounts?.destroy();
 });

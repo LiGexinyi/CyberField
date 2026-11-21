@@ -6,10 +6,12 @@ from itertools import chain
 from collect import store
 
 
-def combined_posts(live, keyword, include_catalog=False):
+def combined_posts(live, keyword, include_catalog=False, include_archive=True):
     """合并当前搜索与本地库，按平台和链接去重。"""
     from types import SimpleNamespace
-    archived = (SimpleNamespace(**row) for row in store.query_posts(keyword=keyword, limit=None))
+    archived = ()
+    if include_archive:
+        archived = (SimpleNamespace(**row) for row in store.query_posts(keyword=keyword, limit=None))
     seen = set()
     for post in chain(live, archived):
         key = (post.platform, post.url)

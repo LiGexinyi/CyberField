@@ -30,7 +30,7 @@ async function showAnalysis(){
     if(!gate.latest(id)||kw!==now.keyword)return;   // 已换词：丢弃旧统计
     chart.replaceChildren();
     if(d.error){chart.append(el('p',d.error));return;}
-    chart.append(el('p',`当前搜索及本地库去重后共 ${d.total} 篇帖子，其中 ${d.dated} 篇有日期，${d.tagged} 篇带其他话题标签。`));
+    chart.append(el('p',`${document.body.dataset.mode==='public'?'当前搜索':'当前搜索及本地库'}去重后共 ${d.total} 篇帖子，其中 ${d.dated} 篇有日期，${d.tagged} 篇带其他话题标签。`));
     if(now.dim==='timeline')renderTimeline(chart,d.timeline);
     else if(now.dim==='topics')renderTopics(chart,d,kw);
 

@@ -70,7 +70,10 @@ class MediaCrawlerSource(BaseSource):
             ocr       是否对笔记图片做 OCR（识别观点文字，慢约 1 秒/图）
         """
         self.mc_dir = Path(mc_dir)
-        self.mc_python = mc_python or str(self.mc_dir / ".venv" / "Scripts" / "python.exe")
+        # 便携版显式指定内置解释器。自定义仓库仍跟随该仓库的虚拟环境。
+        default_python = (settings.MEDIACRAWLER_PYTHON if mc_dir is None
+                          else self.mc_dir / ".venv" / "Scripts" / "python.exe")
+        self.mc_python = mc_python or str(default_python)
         self.login = login
         self.ocr = ocr
 

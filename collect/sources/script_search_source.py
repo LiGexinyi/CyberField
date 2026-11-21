@@ -47,7 +47,10 @@ class ScriptSearchSource(BaseSource):
             timeout   单次搜索子进程超时秒数（默认取子类 default_timeout）
         """
         self.mc_dir = Path(mc_dir or settings.MEDIACRAWLER_DIR)
-        self.mc_python = mc_python or str(self.mc_dir / ".venv" / "Scripts" / "python.exe")
+        # 便携版显式指定内置解释器。自定义仓库仍跟随该仓库的虚拟环境。
+        default_python = (settings.MEDIACRAWLER_PYTHON if mc_dir is None
+                          else self.mc_dir / ".venv" / "Scripts" / "python.exe")
+        self.mc_python = mc_python or str(default_python)
         self.script = Path(script or self.default_script)
         self.profile = Path(profile or self.mc_dir / "browser_data" / self.profile_dir)
         self.timeout = int(self.default_timeout if timeout is None else timeout)

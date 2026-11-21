@@ -17,6 +17,9 @@ LLM 总结需要环境变量 LLM_API_KEY（OpenAI 兼容，默认 DeepSeek）；
 """
 import argparse
 import json
+import os
+import webbrowser
+from threading import BoundedSemaphore
 from dataclasses import asdict
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -42,7 +45,45 @@ def post_to_row(p) -> dict:
     return row
 
 
+class PublicServer(ThreadingHTTPServer):
+    """访客进程的 HTTP 连接数有上限，适合放在平台 HTTPS 网关后。"""
+    public = True
+
+    def __init__(self, address, handler):
+        self._connections = BoundedSemaphore(32)
+        super().__init__(address, handler)
+
+    def process_request(self, request, client_address):
+        """连接额度用尽时返回 503，避免无限创建线程。"""
+        if not self._connections.acquire(blocking=False):
+            try:
+                request.settimeout(1)
+                request.sendall(b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+            except OSError:
+                pass
+            finally:
+                self.shutdown_request(request)
+            return
+        try:
+            super().process_request(request, client_address)
+        except BaseException:
+            self._connections.release()
+            raise
+
+    def process_request_thread(self, request, client_address):
+        """连接结束时归还额度，包括客户端断线的情况。"""
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._connections.release()
+
+
 class Handler(BaseHTTPRequestHandler):
+    @property
+    def public(self):
+        """区分访客版和默认的单机版。"""
+        return getattr(self.server, "public", False)
+
     def _send_json(self, obj, status=200):
         content = json.dumps(obj, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
@@ -83,6 +124,12 @@ class Handler(BaseHTTPRequestHandler):
         path = parts.path
         qs = parse_qs(parts.query)
         pipe: SearchPipeline = self.server.pipeline
+        if path == "/healthz":
+            self._send_json({"ok": True})
+            return
+        if self.public and path in ("/api/accounts", "/api/login", "/api/verify"):
+            self._send_json({"error": "访客版只搜索公开结果"}, status=404)
+            return
         if path == "/api/accounts":
             self._send_json({"accounts": self.server.account_manager.accounts()})
             return
@@ -119,6 +166,8 @@ class Handler(BaseHTTPRequestHandler):
             name = "index.html" if path == "/" else path[1:]
             try:
                 content = (WEB / name).read_bytes()
+                if self.public and name == "index.html":
+                    content = content.replace(b"<body>", b'<body data-mode="public">', 1)
             except OSError:
                 self.send_error(404)
                 return
@@ -186,6 +235,10 @@ class Handler(BaseHTTPRequestHandler):
                 "/api/login", "/api/login/cancel", "/api/verify", "/api/logout"):
             self.send_error(404)
             return
+        if self.public and path in ("/api/topic-interpretation", "/api/login",
+                                    "/api/login/cancel", "/api/verify", "/api/logout"):
+            self._send_json({"error": "该功能可在本机版使用"}, status=404)
+            return
         payload = self._read_json_object()
         if payload is None:
             return  # 校验失败，错误响应已发送
@@ -232,7 +285,10 @@ class Handler(BaseHTTPRequestHandler):
             return  # 校验失败，错误响应已发送
         keyword, page, size = validated
         if path == "/api/search/start":
-            status = pipe.start_search(keyword, size * 3, progressive=payload.get("progressive") is True)
+            status = pipe.start_search(keyword, size * 3, progressive=self.public or payload.get("progressive") is True)
+            if status == "busy":
+                self._send_json({"error": "正在处理其他搜索，请稍后重试"}, status=429)
+                return
             self._send_json({"ok": True, "task": keyword, "status": status})
             return
         if path == "/api/search/continue":
@@ -242,7 +298,8 @@ class Handler(BaseHTTPRequestHandler):
                 return
             status = pipe.continue_search(keyword, related_word.strip())
             errors = {"idle": ("这次搜索已不在工作台中，请先重新搜索", 409),
-                      "failed": ("搜索服务暂不可用", 503)}
+                      "failed": ("搜索服务暂不可用", 503),
+                      "busy": ("正在处理其他搜索，请稍后重试", 429)}
             if status in errors:
                 message, code = errors[status]
                 self._send_json({"error": message}, status=code)
@@ -254,7 +311,7 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json({"error": "平台筛选格式错误"}, status=400)
             return
         result = pipe.search_page(keyword, page=page, size=size, platforms=platforms,
-                                  snapshot=payload.get("snapshot") is True)
+                                  snapshot=self.public or payload.get("snapshot") is True)
         posts = result.pop("posts")
         result["rows"] = [self._row(p) for p in posts]
         self._send_json(result)
@@ -294,20 +351,40 @@ def close_services(server):
         server.pipeline.close(timeout=2.0)
     finally:
         try:
-            server.account_manager.close(timeout=2.0)
+            manager = server.account_manager
+            if manager is not None:
+                manager.close(timeout=2.0)
         finally:
             server.server_close()
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--port", type=int, default=8765)
+    parser.add_argument("--port", type=int)
+    parser.add_argument("--open-browser", action="store_true", help="启动后在默认浏览器中打开工作台")
+    parser.add_argument("--bind", default="127.0.0.1", help="访客版监听地址")
+    parser.add_argument("--public", action="store_true", help="只开放访客搜索和本轮结果统计")
     args = parser.parse_args()
-    server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
+    if args.bind != "127.0.0.1" and not args.public:
+        parser.error("非回环监听需要 --public")
+    port = args.port
+    if port is None:
+        try:
+            port = int(os.getenv("BAT_PORT_http") or "8765") if args.public else 8765
+        except ValueError:
+            parser.error("BAT_PORT_http 必须为数字")
+    server_type = PublicServer if args.public else ThreadingHTTPServer
+    server = server_type((args.bind, port), Handler)
     server.daemon_threads = True  # 停止服务时不因请求处理线程无限等待
-    server.pipeline = SearchPipeline()
-    server.account_manager = AccountManager()
-    print(f"CyberField: http://127.0.0.1:{args.port}", flush=True)
+    server.pipeline = SearchPipeline(public=args.public)
+    server.account_manager = None if args.public else AccountManager()
+    url = f"http://{args.bind}:{server.server_port}/"
+    print(f"CyberField: {url}", flush=True)
+    if args.open_browser:
+        try:
+            webbrowser.open(url)
+        except OSError:
+            print("请手动打开上方地址", flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

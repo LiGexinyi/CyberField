@@ -102,3 +102,4 @@ main{min-width:0}
 .more-search button:disabled{opacity:.55;cursor:wait}
 .more-search input{padding:6px 8px;min-width:0;border:1px solid #cfcfcf;border-radius:3px}
 .more-search .meta-line{margin:0}
+body[data-mode="public"] .local-only{display:none}
